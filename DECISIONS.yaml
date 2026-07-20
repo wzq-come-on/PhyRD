@@ -1,0 +1,60 @@
+project: PhyRD
+version: v10.3
+decisions:
+  - id: D-001
+    title: codebase_route
+    status: accepted
+    decision: route_b_clean_port
+    rationale: >-
+      Official DiffCast is a GPL-3.0 5-to-20 at 128 implementation on
+      Python 3.8 and PyTorch 1.12. PhyRD keeps the matched 5-to-20 at 128
+      task while adding explicit split, physics-gradient, calibration, and
+      modern H800 interfaces. Official code remains an isolated baseline and
+      is never imported by the main package.
+  - id: D-002
+    title: primary_temporal_protocol
+    status: accepted
+    decision: frozen_diffcast_h5_5_to_20
+    rationale: Frozen 25-frame HDF5 samples use five historical frames and twenty future frames at 5 min/frame.
+  - id: D-003
+    title: pooled_csi
+    status: accepted
+    decision: non_overlapping_max_pool_before_thresholding
+    rationale: Makes CSI-pool4 and CSI-pool16 deterministic and reproducible.
+  - id: D-004
+    title: smoke_vs_evidence
+    status: accepted
+    decision: code_ready_does_not_imply_research_gate_passed
+    rationale: This delivery debugs code and real data without claiming trained performance.
+  - id: D-005
+    title: destructive_operations
+    status: accepted
+    decision: ask_user_before_any_delete_or_environment_removal
+    rationale: Explicit user requirement dated 2026-07-15.
+  - id: D-006
+    title: spatial_preprocessing
+    status: accepted
+    decision: primary_diffcast_bilinear_128_with_optional_384_extension
+    rationale: >-
+      DiffCast's effective SEVIR wrapper divides VIL by 255 and applies
+      torchvision Resize to img_size=128; its separate avg-pool helper is
+      disabled in that wrapper. PhyRD makes the 5-to-20@128 primary protocol
+      explicit and forbids mixing it with optional 384 extensions. Area
+      pooling remains an ablation for transport budgets.
+  - id: D-008
+    title: valid_group_partition
+    status: accepted
+    decision: deterministic_sample_id_parity_for_model_and_calibration
+    rationale: >-
+      DiffCast HDF5 provides train, valid, and test groups only. The valid
+      group is frozen into val_model (even sample_id) and val_calib (odd
+      sample_id), while test remains report_test.
+  - id: D-007
+    title: deterministic_backbone
+    status: accepted
+    decision: full_sdir_replaces_compact_2d_unet
+    rationale: >-
+      The legacy channel-stacked 2D U-Net underperformed the fair PhyDNet
+      5-to-20 baseline and over-smoothed high intensities. SDIR directly models
+      low-frequency synoptic structure and Fourier residual detail with PCPSD.
+      Old deterministic checkpoints are protocol-incompatible and retired.

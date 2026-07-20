@@ -1,0 +1,61 @@
+seed: 42
+device: cuda:0
+stage: residual
+data:
+  format: diffcast_h5
+  root: /test1/wzq/Weather/PhyDNet/data/sevir/sevir_vil_only_25frames_384_diffcast.h5
+  split: train
+  max_samples: null
+  input_frames: 5
+  output_frames: 20
+  window_start_index: 0
+  model_resolution: 128
+  spatial_preprocess: diffcast_bilinear
+  batch_size: 32
+  num_workers: 4
+model:
+  base_channels: 64
+  diffusion_steps: 100
+  freeze_deterministic: true
+  deterministic_checkpoint: artifacts/experiments/phyrd_sdir_source_diffcast_5to20_ddp8_seed42/checkpoint_final.pt
+  deterministic:
+    name: sdir_official
+    params:
+      patch_size: 4
+      hidden_size: 512
+      num_heads: 4
+      depth: 8
+      frequency_stride: 16
+      curriculum_alpha: 1.0
+      curriculum_beta: 3.0
+      pcpsd_weight: 0.01
+      model_resolution: 128
+  diffusion:
+    prediction_type: v
+    residual_stats_path: artifacts/experiments/phyrd_sdir_source_diffcast_5to20_ddp8_seed42/residual_stats_train_final.json
+    x0_clip: 10.0
+    x0_clip_quantile: 0.999
+optimization:
+  learning_rate: 0.0004
+  betas: [0.9, 0.999]
+  weight_decay: 0.00001
+  max_epochs: 100
+  log_every: 10
+  precision: bf16
+  grad_clip: 1.0
+validation:
+  enabled: true
+  split: valid
+  every_epochs: 5
+  max_batches: 32
+physics:
+  enabled: true
+  robust_scale: 0.05
+  tolerance: 0.1
+  gamma_nadv: 1.0
+  pool_sizes: [8, 16, 32]
+  alpha_mass: 0.25
+  lambda_train: 0.01
+  apply_below_timestep: 80
+artifacts:
+  directory: artifacts/experiments/phyrd_residual_vpred_diffcast_5to20_ddp8_bs32_b1_seed42

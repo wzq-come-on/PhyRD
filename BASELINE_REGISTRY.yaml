@@ -1,0 +1,16 @@
+baselines:
+  diffcast_official:
+    repo: https://github.com/DeminYu98/DiffCast.git
+    commit: e9340933556d7e351a087a79429a663c3498d738
+    license: GPL-3.0
+    role: isolated_official_baseline
+    protocol: 5_to_20_at_128
+    imported_by_main_package: false
+    local_path: external_baselines/DiffCast
+  persistence:
+    repo: null
+    commit: internal
+    license: project
+    role: deterministic_sanity_baseline
+    protocol: 13_to_12_at_384
+

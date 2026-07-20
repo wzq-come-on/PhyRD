@@ -1,0 +1,21 @@
+name: PhyRD
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - pip>=24
+  - pip:
+      # CUDA wheels must match the host driver; these are the validated PhyRD versions.
+      - torch==2.4.1
+      - torchvision==0.19.1
+      - numpy==2.4.6
+      - pandas==3.0.3
+      - h5py==3.16.0
+      - PyYAML==6.0.3
+      - opencv-python-headless==5.0.0.93
+      - Pillow==12.3.0
+      - lpips==0.1.4
+      - tqdm==4.68.4
+      - pytest==9.1.1
+      - ruff==0.15.21
+      - scipy==1.17.1

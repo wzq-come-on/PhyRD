@@ -1,0 +1,58 @@
+version: phyrd-v10.3
+dataset: SEVIR
+variable: VIL
+value_domain:
+  storage: uint8_0_255
+  model: float_0_1
+input_frames: 5
+output_frames: 20
+source_sample_frames: 25
+window_start_index: 0
+frame_minutes: 5
+forecast_horizon_minutes: 100
+native_resolution: [384, 384]
+resolution: [128, 128]
+spatial_preprocess: diffcast_bilinear
+spatial_variants:
+  primary_diffcast_128:
+    model_resolution: [128, 128]
+    preprocess: bilinear_after_vil_div_255
+    temporal_protocol: 5_to_20
+  extension_sevir_384:
+    model_resolution: [384, 384]
+    preprocess: none
+    temporal_protocol: 13_to_12
+result_mixing_forbidden: true
+flow_order: [dx, dy]
+flow_units: pixels_per_frame
+splits:
+  train:
+    source_group: train
+  val_model:
+    source_group: valid
+    sample_id_modulo: 2
+    sample_id_remainder: 0
+  val_calib:
+    source_group: valid
+    sample_id_modulo: 2
+    sample_id_remainder: 1
+  report_test:
+    source_group: test
+sevir_thresholds: [16, 74, 133, 160, 181, 219]
+csi_pool:
+  operation: max
+  kernels: [1, 4, 16]
+  stride_equals_kernel: true
+primary_metrics:
+  - CSI
+  - CSI_pool4
+  - CSI_pool16
+  - HSS
+  - LPIPS
+  - SSIM
+  - CRPS
+  - MAE
+ensemble_size_primary: 10
+split_manifest_sha256: TBD_AFTER_5TO20_VALID_PARTITION_FREEZE
+calibration_split: val_calib
+report_split: report_test

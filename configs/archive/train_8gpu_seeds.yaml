@@ -1,0 +1,11 @@
+experiment_name: phyrd_v10_2_sdir_8seed_128
+run_root: artifacts/experiments/phyrd_v10_2_sdir_8seed_128
+deterministic_config: configs/archive/train_deterministic_sevir.yaml
+residual_config: configs/archive/train_residual_sevir.yaml
+data_root: /test1/wzq/data/sevir
+requested_gpus: [0, 1, 2, 3, 4, 5, 6, 7]
+seeds: [42, 43, 44, 45, 46, 47, 48, 49]
+health:
+  max_temperature_c: 75
+  max_memory_used_mib: 2048
+  max_utilization_percent: 20

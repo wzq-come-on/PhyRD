@@ -1,0 +1,39 @@
+seed: 8
+data:
+  root: /test1/wzq/data/sevir
+  split: val_model
+  max_samples: 1
+  input_frames: 13
+  output_frames: 12
+  window_start_index: 12
+  model_resolution: 128
+  spatial_preprocess: diffcast_bilinear
+model:
+  base_channels: 16
+  diffusion_steps: 20
+  sampling_steps: 4
+  ensemble_size: 2
+  freeze_deterministic: true
+  deterministic:
+    name: sdir_official
+    params:
+      patch_size: 8
+      hidden_size: 32
+      num_heads: 4
+      depth: 1
+      frequency_stride: 64
+      model_resolution: 128
+physics:
+  robust_scale: 0.05
+  tolerance: 0.1
+  gamma_nadv: 1.0
+  pool_sizes: [8, 16, 32]
+  alpha_mass: 0.25
+  lambda_train: 0.01
+  proximal_step_size: 0.5
+  proximal_apply_below_timestep: 0
+evaluation:
+  thresholds: [16, 74, 133, 160, 181, 219]
+  lpips_net: alex
+artifacts:
+  directory: artifacts/smoke_128

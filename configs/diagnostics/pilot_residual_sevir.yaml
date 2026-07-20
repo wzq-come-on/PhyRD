@@ -1,0 +1,45 @@
+seed: 43
+device: cuda:0
+stage: residual
+data:
+  root: /test1/wzq/data/sevir
+  split: train
+  max_samples: 1
+  input_frames: 13
+  output_frames: 12
+  window_start_index: 12
+  model_resolution: 384
+  spatial_preprocess: none
+  batch_size: 1
+  num_workers: 0
+model:
+  base_channels: 32
+  diffusion_steps: 20
+  freeze_deterministic: true
+  deterministic_checkpoint: null
+  deterministic:
+    name: sdir_official
+    params:
+      patch_size: 24
+      hidden_size: 64
+      num_heads: 4
+      depth: 2
+      frequency_stride: 96
+      model_resolution: 384
+optimization:
+  learning_rate: 0.0001
+  weight_decay: 0.00001
+  max_steps: 1
+  log_every: 1
+validation:
+  enabled: false
+physics:
+  enabled: true
+  robust_scale: 0.05
+  tolerance: 0.1
+  gamma_nadv: 1.0
+  pool_sizes: [8, 16, 32]
+  alpha_mass: 0.25
+  lambda_train: 0.01
+artifacts:
+  directory: artifacts/pilot_residual
