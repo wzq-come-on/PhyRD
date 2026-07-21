@@ -545,7 +545,14 @@ def main() -> None:
                     "max_rank_peak_memory_gib": peak_memory_gib,
                     "precision": precision,
                     "seed": seed,
-                    "deterministic": dict(model_config["deterministic"]),
+                    # Use the resolved composer protocol rather than indexing the
+                    # legacy single-backbone config.  A universal run can contain
+                    # ``model.deterministic_pool`` instead of
+                    # ``model.deterministic``.
+                    "deterministic": {
+                        "name": model.deterministic_name,
+                        "params": model.deterministic_params,
+                    },
                     "best_val_loss": (
                         None
                         if checkpoint_manager.best_val_loss == float("inf")
