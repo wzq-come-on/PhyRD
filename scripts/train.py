@@ -373,7 +373,14 @@ def main() -> None:
             raise RuntimeError("failed to create an experiment directory")
         artifact_dir = Path(generated_directory)
     config["artifacts"] = {**artifacts_config, "directory": str(artifact_dir)}
-    checkpoint_manager = CheckpointManager(artifact_dir, allow_existing=allow_existing)
+    # Rank 0 owns run-output creation and the non-overwrite check.  Other DDP
+    # ranks must attach to the same directory after the broadcast; otherwise
+    # they race with rank 0's config snapshot and mistake a fresh run for an
+    # existing artifact.
+    checkpoint_manager = CheckpointManager(
+        artifact_dir,
+        allow_existing=allow_existing or not is_main,
+    )
     if is_main and not allow_existing:
         checkpoint_manager.write_config_snapshot(config)
     if world_size > 1:
