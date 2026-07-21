@@ -2,8 +2,11 @@
 set -u
 
 EXP=/test1/wzq/PhyRD/artifacts/experiments/phyrd_sdir_source_diffcast_5to20_ddp8_seed42
-SUMMARY="$EXP/run_summary.json"
-CHECKPOINT="$EXP/checkpoint_best.pt"
+SUMMARY="$EXP/metrics/run_summary.json"
+CHECKPOINT="$EXP/checkpoints/checkpoint_best.pt"
+# Keep watching legacy runs whose outputs predate the v11 layout.
+if [[ ! -f "$SUMMARY" ]]; then SUMMARY="$EXP/run_summary.json"; fi
+if [[ ! -f "$CHECKPOINT" ]]; then CHECKPOINT="$EXP/checkpoint_best.pt"; fi
 OUT=/test1/wzq/Weather/evaluate/results/sdir_source_final_5to20.json
 VIS=/test1/wzq/Weather/evaluate/results/sdir_source_final_5to20_visuals
 CONFIG=/test1/wzq/PhyRD/configs/active/5to20/train_ddp8_sdir_source_diffcast_5to20.yaml
@@ -16,7 +19,7 @@ while true; do
       echo "Training completed; evaluating the best validation checkpoint."
       CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
         /root/miniconda3/envs/sdir/bin/torchrun --standalone --nproc_per_node=8 \
-        /test1/wzq/PhyRD/scripts/evaluation/evaluate_5to20.py \
+        python -m scripts.evaluate --mode protocol --protocol 5to20 \
         --model sdir --config "$CONFIG" --checkpoint "$CHECKPOINT" \
         --data-path "$DATA" --split test --batch-size 8 --num-workers 4 \
         --img-size 128 --output "$OUT" --visualization-dir "$VIS" \

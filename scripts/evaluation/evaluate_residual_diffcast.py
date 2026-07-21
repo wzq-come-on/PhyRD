@@ -12,10 +12,10 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader, Sampler
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "src"))
-sys.path.insert(0, str(ROOT / "scripts" / "evaluation"))
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(ROOT))
 
-from common import (  # noqa: E402
+from scripts.evaluation.common import (
     _batch_xy,
     _continuous_metrics,
     _ssim,

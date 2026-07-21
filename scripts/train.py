@@ -457,7 +457,7 @@ def main() -> None:
             )
             if is_main:
                 checkpoint_manager.save(payload, val_loss=last_val_loss)
-                write_json(artifact_dir / "train_log.json", history_log)
+                write_json(checkpoint_manager.metrics_directory / "train_log.json", history_log)
             if world_size > 1:
                 dist.barrier()
         if world_size > 1:
@@ -473,7 +473,7 @@ def main() -> None:
             peak_memory_gib = float(peak_memory.item())
         if is_main:
             write_json(
-                artifact_dir / "run_summary.json",
+                checkpoint_manager.metrics_directory / "run_summary.json",
                 {
                     "status": "completed",
                     "stage": stage,

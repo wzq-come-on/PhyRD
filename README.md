@@ -90,6 +90,11 @@ The primary `5→20@128` server validation and one-step two-stage training chain
 conda run -n PhyRD python scripts/train.py --config configs/active/5to20/train_ddp8_sdir_source_diffcast_5to20.yaml
 conda run -n PhyRD python scripts/train.py --config configs/active/5to20/train_ddp8_residual_diffcast_5to20_vpred_b1_formal_split_seed42.yaml
 conda run -n PhyRD python scripts/evaluate.py --predictions predictions.npz --require-lpips
+
+# HDF5 protocol evaluation (the same entry point dispatches all evaluators)
+python -m scripts.evaluate --mode protocol --protocol 5to20 --model sdir \
+  --checkpoint /path/to/checkpoint.pt --config /path/to/config.yaml \
+  --data-path /path/to/sevir.h5 --output /path/to/report.json
 ```
 
 Training is explicitly two-stage: first train the deterministic trend, then point the residual config at that frozen checkpoint. The residual stage fails loudly if the deterministic checkpoint is absent, preventing accidental diffusion training around a random frozen trend. Formal training must freeze the HDF5 valid-group partition, run multiple seeds, and keep `val_model`, `val_calib`, and `report_test` isolated as specified in `PROTOCOL.yaml`.

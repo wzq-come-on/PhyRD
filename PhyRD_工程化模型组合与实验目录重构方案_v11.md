@@ -292,3 +292,10 @@ artifacts/               # 本地实验产物，不进入 Git
 - 实验登记中 E-010 已更新为 stopped，原因是 report_test 未超过 SDIR 基线。
 
 旧 artifact 目录没有被搬动或覆盖。后续仍需在独立分支上完成统一评估 CLI、predictions/metrics 子目录和新概率模型（如 JDIR）的接入。
+## 11. 第二阶段收口记录（2026-07-21）
+
+- 评估统一入口为 `python -m scripts.evaluate`；通过 `--mode` 选择 `artifact`、`protocol`、`residual_diffcast` 或 `deterministic_diffcast`。
+- `scripts/evaluation/common.py` 继续作为共享指标核心，旧的协议脚本保留为兼容别名；新启动脚本不再直接调用分散的评估文件。
+- 评估入口已通过本地编译检查，并在两台服务器完成源码编译与 `phyrd` 注册表导入检查。
+- 旧实验产物属于服务器本地数据，不纳入 Git；本轮不复制、不删除、不覆盖 checkpoint、日志和已有测试 JSON。新实验按 v11 目录规范写入独立时间戳目录。
+- 新运行目录现在预创建 `checkpoints/`、`metrics/` 和 `predictions/`；训练日志与运行摘要写入 `metrics/`，旧目录仍由兼容读取逻辑支持。

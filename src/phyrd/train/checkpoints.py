@@ -17,6 +17,8 @@ class CheckpointManager:
     def __init__(self, directory: str | Path, *, allow_existing: bool = False) -> None:
         self.directory = Path(directory)
         self.checkpoint_directory = self.directory / "checkpoints"
+        self.metrics_directory = self.directory / "metrics"
+        self.predictions_directory = self.directory / "predictions"
         existing = (
             list(self.checkpoint_directory.glob("checkpoint_*.pt"))
             + list(self.directory.glob("checkpoint_*.pt"))
@@ -38,6 +40,8 @@ class CheckpointManager:
             )
         self.directory.mkdir(parents=True, exist_ok=True)
         self.checkpoint_directory.mkdir(parents=True, exist_ok=True)
+        self.metrics_directory.mkdir(parents=True, exist_ok=True)
+        self.predictions_directory.mkdir(parents=True, exist_ok=True)
         self.best_val_loss = float("inf")
 
     def write_config_snapshot(self, config: dict[str, Any]) -> Path:
