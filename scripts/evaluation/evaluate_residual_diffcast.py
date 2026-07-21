@@ -46,6 +46,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Evaluate the trained PhyRD residual diffusion model")
     p.add_argument("--config", required=True)
     p.add_argument("--checkpoint", required=True)
+    p.add_argument("--backbone", default=None, help="required for deterministic_pool configs")
     p.add_argument("--output", required=True)
     p.add_argument("--split", default="test")
     p.add_argument("--max-samples", type=int, default=None)
@@ -110,7 +111,14 @@ def main() -> None:
         output_frames=int(data_cfg["output_frames"]),
     ).to(device).eval()
     payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    model.deterministic.load_state_dict(payload["deterministic"], strict=True)
+    if "deterministic" in payload:
+        model.deterministic.load_state_dict(payload["deterministic"], strict=True)
+    elif hasattr(model.deterministic, "select"):
+        if args.backbone is None:
+            raise ValueError("--backbone is required when evaluating a deterministic_pool config")
+        model.select_backbone(args.backbone)
+    else:
+        raise KeyError("checkpoint does not contain a deterministic state dict")
     model.diffusion.load_state_dict(payload["diffusion"], strict=True)
 
     frames = int(data_cfg["output_frames"])

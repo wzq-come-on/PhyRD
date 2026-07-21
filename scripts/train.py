@@ -19,7 +19,7 @@ from phyrd.models import build_composite_from_config, checkpoint_backbone_spec
 from phyrd.models.composer import ForecastComposer
 from phyrd.motion import build_motion_fields
 from phyrd.physics import weak_transport_loss
-from phyrd.train import CheckpointManager
+from phyrd.train import CheckpointManager, build_experiment_directory
 from phyrd.utils import seed_everything, write_json
 
 
@@ -182,12 +182,17 @@ def checkpoint_payload(
             "global_batch_size": int(data_config["batch_size"]) * world_size,
             "precision": precision,
         },
-        "deterministic": model.deterministic.state_dict(),
         "optimizer": optimizer.state_dict(),
         "step": step,
         "epoch": epoch,
         "val_loss": val_loss,
     }
+    pool_specs = getattr(model.deterministic, "member_specs", None)
+    if pool_specs is None:
+        payload["deterministic"] = model.deterministic.state_dict()
+    else:
+        payload["deterministic_pool"] = pool_specs
+        payload["active_backbone"] = getattr(model.deterministic, "active_name", None)
     if stage == "residual":
         payload["diffusion"] = model.diffusion.state_dict()
         payload["protocol"]["diffusion"] = model.diffusion_config
@@ -256,46 +261,53 @@ def main() -> None:
         output_frames=dataset.output_frames,
     ).to(device)
     deterministic_checkpoint = model_config.get("deterministic_checkpoint")
+    uses_backbone_pool = hasattr(model.deterministic, "select_for_step")
     if stage == "residual":
-        if not deterministic_checkpoint:
+        if uses_backbone_pool:
+            model.deterministic.requires_grad_(False)
+            model.deterministic.eval()
+            model.diffusion.requires_grad_(True)
+            model.freeze_deterministic = True
+        elif not deterministic_checkpoint:
             raise ValueError("residual stage requires model.deterministic_checkpoint")
-        checkpoint_path = Path(deterministic_checkpoint)
-        if not checkpoint_path.is_file():
-            raise FileNotFoundError(f"deterministic checkpoint not found: {checkpoint_path}")
-        payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-        if "deterministic" not in payload:
-            raise KeyError("checkpoint does not contain a deterministic state dict")
-        checkpoint_protocol = payload.get("protocol")
-        expected_data_protocol = {
-            "input_frames": dataset.input_frames,
-            "output_frames": dataset.output_frames,
-            "native_resolution": dataset.native_resolution,
-            "model_resolution": dataset.model_resolution,
-            "spatial_preprocess": dataset.spatial_preprocess,
-        }
-        checkpoint_data_protocol = {
-            key: checkpoint_protocol.get(key) for key in expected_data_protocol
-        } if isinstance(checkpoint_protocol, dict) else None
-        checkpoint_deterministic = (
-            checkpoint_backbone_spec(checkpoint_protocol)
-            if isinstance(checkpoint_protocol, dict)
-            else None
-        )
-        if (
-            checkpoint_data_protocol != expected_data_protocol
-            or checkpoint_deterministic != dict(model_config["deterministic"])
-        ):
-            raise ValueError(
-                "deterministic checkpoint protocol mismatch: "
-                f"checkpoint={checkpoint_protocol}, "
-                f"current_data={expected_data_protocol}, "
-                f"current_deterministic={model_config['deterministic']}"
+        else:
+            checkpoint_path = Path(deterministic_checkpoint)
+            if not checkpoint_path.is_file():
+                raise FileNotFoundError(f"deterministic checkpoint not found: {checkpoint_path}")
+            payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            if "deterministic" not in payload:
+                raise KeyError("checkpoint does not contain a deterministic state dict")
+            checkpoint_protocol = payload.get("protocol")
+            expected_data_protocol = {
+                "input_frames": dataset.input_frames,
+                "output_frames": dataset.output_frames,
+                "native_resolution": dataset.native_resolution,
+                "model_resolution": dataset.model_resolution,
+                "spatial_preprocess": dataset.spatial_preprocess,
+            }
+            checkpoint_data_protocol = {
+                key: checkpoint_protocol.get(key) for key in expected_data_protocol
+            } if isinstance(checkpoint_protocol, dict) else None
+            checkpoint_deterministic = (
+                checkpoint_backbone_spec(checkpoint_protocol)
+                if isinstance(checkpoint_protocol, dict)
+                else None
             )
-        model.deterministic.load_state_dict(payload["deterministic"])
-        model.deterministic.requires_grad_(False)
-        model.deterministic.eval()
-        model.diffusion.requires_grad_(True)
-        model.freeze_deterministic = True
+            if (
+                checkpoint_data_protocol != expected_data_protocol
+                or checkpoint_deterministic != dict(model_config["deterministic"])
+            ):
+                raise ValueError(
+                    "deterministic checkpoint protocol mismatch: "
+                    f"checkpoint={checkpoint_protocol}, "
+                    f"current_data={expected_data_protocol}, "
+                    f"current_deterministic={model_config['deterministic']}"
+                )
+            model.deterministic.load_state_dict(payload["deterministic"])
+            model.deterministic.requires_grad_(False)
+            model.deterministic.eval()
+            model.diffusion.requires_grad_(True)
+            model.freeze_deterministic = True
     else:
         model.deterministic.requires_grad_(True)
         model.diffusion.requires_grad_(False)
@@ -333,14 +345,40 @@ def main() -> None:
         max_steps = int(optimization["max_steps"])
     precision = str(optimization.get("precision", "fp32"))
     scaler = torch.cuda.amp.GradScaler(enabled=device.type == "cuda" and precision == "fp16")
-    artifact_dir = Path(config["artifacts"]["directory"])
-    allow_existing = bool(config["artifacts"].get("allow_existing", False))
+    artifacts_config = dict(config["artifacts"])
+    allow_existing = bool(artifacts_config.get("allow_existing", False))
+    configured_directory = artifacts_config.get("directory")
+    if configured_directory:
+        artifact_dir = Path(str(configured_directory))
+    else:
+        generated_directory = None
+        if is_main:
+            generated_directory = str(
+                build_experiment_directory(
+                    artifacts_config.get("root", "artifacts/experiments"),
+                    str(artifacts_config.get("deterministic_name", model.deterministic_name)),
+                    str(
+                        artifacts_config.get(
+                            "probabilistic_name",
+                            model_config.get("probabilistic", {}).get("name", "residual_diffusion"),
+                        )
+                    ),
+                )
+            )
+        if world_size > 1:
+            generated_paths = [generated_directory]
+            dist.broadcast_object_list(generated_paths, src=0)
+            generated_directory = generated_paths[0]
+        if not generated_directory:
+            raise RuntimeError("failed to create an experiment directory")
+        artifact_dir = Path(generated_directory)
+    config["artifacts"] = {**artifacts_config, "directory": str(artifact_dir)}
     checkpoint_manager = CheckpointManager(artifact_dir, allow_existing=allow_existing)
     if is_main and not allow_existing:
         checkpoint_manager.write_config_snapshot(config)
     if world_size > 1:
         dist.barrier()
-    history_log: list[dict[str, float | int]] = []
+    history_log: list[dict[str, float | int | str]] = []
     step = 0
     epoch = 0
     last_val_loss: float | None = None
@@ -354,6 +392,11 @@ def main() -> None:
             for batch in loader:
                 history = batch["x"].to(device, non_blocking=True)
                 target = batch["y"].to(device, non_blocking=True)
+                active_backbone = (
+                    model.select_backbone_for_step(step, seed)
+                    if stage == "residual" and uses_backbone_pool
+                    else None
+                )
                 optimizer.zero_grad(set_to_none=True)
                 with autocast_context(device, precision):
                     if stage == "deterministic":
@@ -409,6 +452,8 @@ def main() -> None:
                         "loss_gen": distributed_mean(loss_gen, world_size),
                         "loss_phys": distributed_mean(physics_value, world_size),
                     }
+                    if active_backbone is not None:
+                        record["backbone"] = active_backbone
                     if stage == "deterministic":
                         for metric_name, metric_value in result.items():
                             if metric_name.startswith("loss_") and metric_name != "loss_gen":
@@ -425,6 +470,11 @@ def main() -> None:
             )
             if validation_due:
                 assert validation_loader is not None
+                if stage == "residual" and uses_backbone_pool:
+                    validation_backbone = str(
+                        validation_config.get("backbone", model.deterministic.names[0])
+                    )
+                    model.select_backbone(validation_backbone)
                 last_val_loss = validate(
                     train_model,
                     validation_loader,

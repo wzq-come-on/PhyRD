@@ -11,16 +11,23 @@ from .registry import (
     checkpoint_backbone_spec,
     register_backbone,
 )
+from .pool import BackbonePool, build_backbone_pool
 
 register_backbone(
     "sdir_official",
     "phyrd.models.deterministic.sdir_official:OfficialSDIRForecast",
 )
+register_backbone(
+    "phydnet_external",
+    "phyrd.models.deterministic.phydnet_external:ExternalPhyDNetForecast",
+)
 
 __all__ = [
     "DeterministicLossOutput",
+    "BackbonePool",
     "available_backbones",
     "build_backbone",
+    "build_backbone_pool",
     "checkpoint_backbone_spec",
     "register_backbone",
 ]

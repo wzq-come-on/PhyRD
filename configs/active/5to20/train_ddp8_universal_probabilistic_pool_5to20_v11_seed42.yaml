@@ -1,0 +1,75 @@
+# v11.1: one frozen probabilistic residual adapter trained across backbone outputs.
+seed: 42
+device: cuda:0
+stage: residual
+data:
+  format: diffcast_h5
+  root: /test1/wzq/Weather/PhyDNet/data/sevir/sevir_vil_only_25frames_384_diffcast.h5
+  split: train
+  max_samples: null
+  input_frames: 5
+  output_frames: 20
+  window_start_index: 0
+  model_resolution: 128
+  spatial_preprocess: diffcast_bilinear
+  batch_size: 8
+  num_workers: 0
+model:
+  base_channels: 64
+  diffusion_steps: 100
+  freeze_deterministic: true
+  deterministic_pool:
+    selection: weighted_random
+    members:
+      - name: sdir_official
+        checkpoint: artifacts/experiments/phyrd_sdir_source_diffcast_5to20_ddp8_seed42/checkpoint_final.pt
+        weight: 1.0
+        params:
+          patch_size: 4
+          hidden_size: 512
+          num_heads: 4
+          depth: 8
+          frequency_stride: 16
+          curriculum_alpha: 1.0
+          curriculum_beta: 3.0
+          pcpsd_weight: 0.01
+          model_resolution: 128
+      - name: phydnet_external
+        checkpoint: /test1/wzq/Weather/PhyDNet/save/sevir_diffcast_setting/phydnet_sevir_5in20out_best.pth
+        weight: 1.0
+        params:
+          root: /test1/wzq/Weather/PhyDNet
+          model_resolution: 128
+  probabilistic:
+    name: universal_residual_diffusion
+    params:
+      prediction_type: v
+      x0_clip: 1.0
+      x0_clip_quantile: null
+    extensions: []
+optimization:
+  learning_rate: 0.0004
+  betas: [0.9, 0.999]
+  weight_decay: 0.00001
+  max_epochs: 100
+  log_every: 10
+  precision: bf16
+  grad_clip: 1.0
+validation:
+  enabled: true
+  split: val_model
+  every_epochs: 5
+  max_batches: 32
+  backbone: sdir_official
+physics:
+  enabled: false
+  robust_scale: 0.05
+  tolerance: 0.1
+  gamma_nadv: 1.0
+  pool_sizes: [8, 16, 32]
+  alpha_mass: 0.25
+  lambda_train: 0.0
+artifacts:
+  root: artifacts/experiments
+  deterministic_name: backbone_pool
+  probabilistic_name: universal_residual_diffusion

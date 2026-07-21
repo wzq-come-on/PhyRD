@@ -15,6 +15,13 @@ model:
 
 New deterministic backbones are added to the registry described in `src/phyrd/models/deterministic/README.md`; training and evaluation code do not need backbone-specific branches.
 
+For a backbone-agnostic probabilistic model, use `model.deterministic_pool` rather than
+a single `deterministic` block. Every member is frozen and exposes the same normalized
+`[B,T,1,H,W]` trend contract; one member is selected per probability-training batch.
+`universal_residual_diffusion` uses the fixed `target - trend` residual coordinate and
+therefore does not accept a backbone-specific `residual_stats_path`. The first SDIR +
+PhyDNet pool configuration is `configs/active/5to20/train_ddp8_universal_probabilistic_pool_5to20_v11_seed42.yaml`.
+
 The corresponding probabilistic contract is:
 
 ```yaml

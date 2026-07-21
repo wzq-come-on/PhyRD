@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from torch import nn
 
 from .composer import ForecastComposer
-from .deterministic import build_backbone
+from .deterministic import build_backbone, build_backbone_pool
 from .probabilistic import build_probabilistic
 
 
@@ -21,15 +21,28 @@ def build_composite_from_config(
     migrate without changing checkpoint loading in one step.
     """
     model_config = dict(config.get("model", {}))
-    deterministic_config = dict(model_config.get("deterministic", {}))
-    deterministic_name = str(deterministic_config.get("name", "sdir_official"))
-    deterministic_params = dict(deterministic_config.get("params", {}))
-    deterministic = build_backbone(
-        deterministic_name,
-        input_frames=input_frames,
-        output_frames=output_frames,
-        params=deterministic_params,
-    )
+    pool_config = model_config.get("deterministic_pool")
+    if pool_config is not None:
+        if not isinstance(pool_config, Mapping):
+            raise TypeError("model.deterministic_pool must be a mapping")
+        deterministic = build_backbone_pool(
+            list(pool_config.get("members", [])),
+            input_frames=input_frames,
+            output_frames=output_frames,
+            selection=str(pool_config.get("selection", "uniform")),
+        )
+        deterministic_name = "backbone_pool"
+        deterministic_params = {"selection": deterministic.selection, "members": deterministic.member_specs}
+    else:
+        deterministic_config = dict(model_config.get("deterministic", {}))
+        deterministic_name = str(deterministic_config.get("name", "sdir_official"))
+        deterministic_params = dict(deterministic_config.get("params", {}))
+        deterministic = build_backbone(
+            deterministic_name,
+            input_frames=input_frames,
+            output_frames=output_frames,
+            params=deterministic_params,
+        )
 
     probabilistic_config = dict(model_config.get("probabilistic", {}))
     probabilistic_name = str(

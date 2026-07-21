@@ -11,6 +11,10 @@ register_probabilistic(
     "residual_diffusion",
     "phyrd.models.probabilistic.residual_diffusion:ResidualDiffusionModel",
 )
+register_probabilistic(
+    "universal_residual_diffusion",
+    "phyrd.models.probabilistic.universal_residual_diffusion:UniversalResidualDiffusionModel",
+)
 
 __all__ = [
     "ProbabilisticModel",

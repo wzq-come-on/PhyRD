@@ -16,10 +16,18 @@ def test_model_configs_use_the_deterministic_registry_contract() -> None:
     for path, config in load_configs():
         if "model" not in config:
             continue
-        deterministic = config["model"]["deterministic"]
-        assert set(deterministic) == {"name", "params"}, path
-        assert isinstance(deterministic["name"], str) and deterministic["name"], path
-        assert isinstance(deterministic["params"], dict), path
+        model = config["model"]
+        if "deterministic_pool" in model:
+            pool = model["deterministic_pool"]
+            assert isinstance(pool, dict) and pool["members"], path
+            for member in pool["members"]:
+                assert member["name"] and member["checkpoint"], path
+                assert isinstance(member["params"], dict), path
+        else:
+            deterministic = model["deterministic"]
+            assert set(deterministic) == {"name", "params"}, path
+            assert isinstance(deterministic["name"], str) and deterministic["name"], path
+            assert isinstance(deterministic["params"], dict), path
 
 
 def test_checkpoint_policy_has_no_periodic_checkpoint_setting() -> None:
@@ -32,6 +40,8 @@ def test_checkpoint_policy_has_no_periodic_checkpoint_setting() -> None:
 def test_residual_runs_consume_a_supported_deterministic_checkpoint() -> None:
     for path, config in load_configs():
         if config.get("stage") != "residual":
+            continue
+        if "deterministic_pool" in config["model"]:
             continue
         checkpoint = config["model"].get("deterministic_checkpoint")
         if checkpoint is not None:

@@ -299,3 +299,34 @@ artifacts/               # 本地实验产物，不进入 Git
 - 评估入口已通过本地编译检查，并在两台服务器完成源码编译与 `phyrd` 注册表导入检查。
 - 旧实验产物属于服务器本地数据，不纳入 Git；本轮不复制、不删除、不覆盖 checkpoint、日志和已有测试 JSON。新实验按 v11 目录规范写入独立时间戳目录。
 - 新运行目录现在预创建 `checkpoints/`、`metrics/` 和 `predictions/`；训练日志与运行摘要写入 `metrics/`，旧目录仍由兼容读取逻辑支持。
+
+## 12. v11.1：通用概率适配层（2026-07-21）
+
+v11 的 registry/composer 解决的是“可以从配置替换 backbone”；v11.1 的目标进一步变为“同一个概率模型对多个冻结 backbone 有效”。因此不能继续使用某个 SDIR 训练集计算出的 `residual_stats_path`。该统计量会把概率模型绑定为 `P(SDIR residual | history, SDIR trend)`，直接替换成 PhyDNet trend 时会发生残差分布错配。
+
+新的条件概率目标固定为：
+
+```text
+P(y | history, trend),  trend = frozen_backbone(history)
+residual = y - trend ∈ [-1, 1]
+```
+
+所有 backbone 都必须输出 `[B,T,1,H,W]`、值域 `[0,1]` 的 trend。`universal_residual_diffusion` 仅使用 `history`、`trend` 与固定残差坐标；不读取任何 backbone 专属的 residual center/scale。运动、物理或校准仍是可选概率扩展，而不是前提。
+
+训练配置使用 `model.deterministic_pool`。pool 中每个 backbone 均加载独立 checkpoint 并冻结；每个 batch 按 `uniform`、`weighted_random` 或 `round_robin` 规则同步选择一个 backbone。当前第一组 pool 是 SDIR 与外部 PhyDNet adapter：
+
+```text
+SDIR checkpoint ───┐
+                   ├──> frozen backbone pool ──> universal residual diffusion
+PhyDNet checkpoint ┘
+```
+
+这不是把两个 backbone 融合成一个确定性网络；每个 batch 只有一个 trend。概率模型必须在两个条件分布上都学习 residual。验证阶段使用配置指定的固定 backbone；正式结果需要分别在每个 backbone 上独立 report_test，并报告“纯 backbone”与“backbone + 同一概率 checkpoint”的差值。
+
+第一个可运行配置为：
+
+```text
+configs/active/5to20/train_ddp8_universal_probabilistic_pool_5to20_v11_seed42.yaml
+```
+
+它使用唯一时间戳实验目录，并保存配置快照、`checkpoints/`、`metrics/` 和 `predictions/`。旧 SDIR 专属 B1 与其 checkpoint、评估结果保持不变，只作为历史对照。

@@ -13,3 +13,7 @@ Every model registered in `registry.py` exposes:
 The deterministic trend is passed explicitly by `models/composer.py`. Adding a
 new probabilistic model therefore requires a new package and one registry entry,
 not a new model-specific branch in `scripts/train.py`.
+
+`universal_residual_diffusion` is the backbone-agnostic DiffCast-style option. It is
+trained with a frozen deterministic pool and fixed `target - trend` residual coordinates;
+it must not receive a `residual_stats_path` derived from a single backbone.

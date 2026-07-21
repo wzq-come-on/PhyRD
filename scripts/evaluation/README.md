@@ -14,6 +14,9 @@ residual and deterministic modules are model adapters invoked by the dispatcher;
 their direct file paths are retained only as compatibility aliases for old
 launchers.
 
+For a `deterministic_pool` configuration, residual evaluation must name the
+backbone explicitly, for example `--mode residual_diffcast --backbone sdir_official`.
+
 The two entry points share one metric implementation:
 
 - `evaluate_5to20.py`: five input frames, twenty output frames.

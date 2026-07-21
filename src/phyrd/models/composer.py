@@ -45,6 +45,14 @@ class ForecastComposer(nn.Module):
         trend = self.deterministic(history)
         return trend.detach() if self.freeze_deterministic else trend
 
+    def select_backbone_for_step(self, step: int, seed: int) -> str | None:
+        selector = getattr(self.deterministic, "select_for_step", None)
+        return selector(step, seed) if callable(selector) else None
+
+    def select_backbone(self, name: str) -> str | None:
+        selector = getattr(self.deterministic, "select", None)
+        return selector(name) if callable(selector) else None
+
     def training_loss(self, history: torch.Tensor, target: torch.Tensor) -> dict[str, torch.Tensor]:
         trend = self.predict_trend(history)
         result = self.probabilistic.training_loss(history, target, trend)
