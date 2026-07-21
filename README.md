@@ -1,6 +1,6 @@
 # PhyRD v10.3
 
-PhyRD currently uses the official SDIR migration as its deterministic trend backbone, followed by residual diffusion and reliability-gated weak-transport guidance. Deterministic adapters live exclusively under `src/phyrd/models/deterministic/` and are selected through `model.deterministic.name`; upstream source trees stay under `third_party/`. The legacy compact 2D U-Net and the former native SDIR reimplementation are retired and incompatible.
+PhyRD is organized as a deterministic backbone plus a config-selected probabilistic model. Deterministic adapters live under `src/phyrd/models/deterministic/`; probabilistic models and their components live under `src/phyrd/models/probabilistic/`. The pair is constructed through the shared factory/composer, so the trainer does not need a branch for every new model. Upstream source trees stay under `third_party/`.
 
 The deterministic model selection contract is:
 
@@ -14,6 +14,26 @@ model:
 ```
 
 New deterministic backbones are added to the registry described in `src/phyrd/models/deterministic/README.md`; training and evaluation code do not need backbone-specific branches.
+
+The corresponding probabilistic contract is:
+
+```yaml
+model:
+  deterministic:
+    name: sdir_official
+    params: {model_resolution: 128}
+  probabilistic:
+    name: residual_diffusion
+    params:
+      prediction_type: v
+    extensions: []
+```
+
+Each model is a package when it has multiple components. For example,
+`probabilistic/residual_diffusion/` contains the denoiser, diffusion schedule,
+sampler, and model adapter. Physics and calibration hooks belong inside the
+probabilistic model that uses them; they are optional extensions, not global
+assumptions.
 
 Official SDIR additionally requires a CUDA/torch-matched `flash-attn` wheel. Server wheels belong under `vendor/wheels/`, not in the project root.
 
@@ -74,7 +94,14 @@ conda run -n PhyRD python scripts/evaluate.py --predictions predictions.npz --re
 
 Training is explicitly two-stage: first train the deterministic trend, then point the residual config at that frozen checkpoint. The residual stage fails loudly if the deterministic checkpoint is absent, preventing accidental diffusion training around a random frozen trend. Formal training must freeze the HDF5 valid-group partition, run multiple seeds, and keep `val_model`, `val_calib`, and `report_test` isolated as specified in `PROTOCOL.yaml`.
 
-Formal training writes only two model files: `checkpoint_last.pt`, updated to the newest completed epoch, and `checkpoint_best.pt`, updated only when the configured validation loss improves. Existing run directories are rejected by default, preventing a new launch from silently overwriting an earlier experiment. Use a fresh `artifacts.directory` for every run.
+Formal training writes `checkpoints/checkpoint_last.pt` and
+`checkpoints/checkpoint_best.pt`; the latter is updated only when the configured
+validation loss improves. Every new run also stores a full
+`config_snapshot.yaml`. New experiment paths should use
+`artifacts/experiments/<deterministic>_<probabilistic>/YYYYMMDD_HHMMSS/`.
+Existing run directories are rejected by default, preventing a new launch from
+silently overwriting an earlier experiment. Old v10/v10.3 artifact layouts are
+kept unchanged for reproducibility.
 
 ## Multi-GPU DDP training
 

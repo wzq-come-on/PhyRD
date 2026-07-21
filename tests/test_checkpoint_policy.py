@@ -15,13 +15,14 @@ def test_checkpoint_manager_keeps_only_best_and_last(tmp_path: Path) -> None:
     manager.save({"step": 10}, val_loss=0.5)
     manager.save({"step": 20}, val_loss=0.7)
 
-    assert load(tmp_path / "checkpoint_best.pt")["step"] == 10
-    assert load(tmp_path / "checkpoint_last.pt")["step"] == 20
+    checkpoint_dir = tmp_path / "checkpoints"
+    assert load(checkpoint_dir / "checkpoint_best.pt")["step"] == 10
+    assert load(checkpoint_dir / "checkpoint_last.pt")["step"] == 20
 
     manager.save({"step": 30}, val_loss=0.4)
-    assert load(tmp_path / "checkpoint_best.pt")["step"] == 30
-    assert load(tmp_path / "checkpoint_last.pt")["step"] == 30
-    assert sorted(path.name for path in tmp_path.glob("*.pt")) == [
+    assert load(checkpoint_dir / "checkpoint_best.pt")["step"] == 30
+    assert load(checkpoint_dir / "checkpoint_last.pt")["step"] == 30
+    assert sorted(path.name for path in checkpoint_dir.glob("*.pt")) == [
         "checkpoint_best.pt",
         "checkpoint_last.pt",
     ]

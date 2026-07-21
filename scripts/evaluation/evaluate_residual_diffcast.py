@@ -26,7 +26,7 @@ from phyrd.config import load_config  # noqa: E402
 from phyrd.data import DiffCastH5Dataset, SEVIRDataset  # noqa: E402
 from phyrd.evaluation.probabilistic import crps_ensemble  # noqa: E402
 from phyrd.evaluation.risk import build_risk_batch  # noqa: E402
-from phyrd.models import PhyRDModel  # noqa: E402
+from phyrd.models import build_composite_from_config  # noqa: E402
 from phyrd.motion import build_motion_fields  # noqa: E402
 from phyrd.physics import ProximalGuidance, weak_transport_loss  # noqa: E402
 
@@ -104,15 +104,10 @@ def main() -> None:
         persistent_workers=args.num_workers > 0,
     )
 
-    model_cfg = cfg["model"]
-    model = PhyRDModel(
+    model = build_composite_from_config(
+        cfg,
         input_frames=int(data_cfg["input_frames"]),
         output_frames=int(data_cfg["output_frames"]),
-        base_channels=int(model_cfg.get("base_channels", 32)),
-        diffusion_steps=int(model_cfg.get("diffusion_steps", 100)),
-        freeze_deterministic=bool(model_cfg.get("freeze_deterministic", True)),
-        deterministic=dict(model_cfg["deterministic"]),
-        diffusion=dict(model_cfg.get("diffusion", {})),
     ).to(device).eval()
     payload = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     model.deterministic.load_state_dict(payload["deterministic"], strict=True)

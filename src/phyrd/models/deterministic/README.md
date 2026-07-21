@@ -6,7 +6,8 @@ normalizes the model to PhyRD's `[B,T,1,H,W]` interface.
 
 ## Add a backbone
 
-1. Add one adapter module in this directory.
+1. Add one adapter package in this directory when the model has multiple
+   components; a single module is acceptable for a genuinely small adapter.
 2. Add one lazy `register_backbone("name", "module:Class")` entry in
    `deterministic/__init__.py`. Lazy registration prevents one backbone's
    optional dependencies from being required when another backbone is used.

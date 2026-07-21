@@ -15,7 +15,8 @@ from torch.utils.data import DataLoader, DistributedSampler
 
 from phyrd.config import load_config
 from phyrd.data import DiffCastH5Dataset, SEVIRDataset
-from phyrd.models import PhyRDModel, checkpoint_backbone_spec
+from phyrd.models import build_composite_from_config, checkpoint_backbone_spec
+from phyrd.models.composer import ForecastComposer
 from phyrd.motion import build_motion_fields
 from phyrd.physics import weak_transport_loss
 from phyrd.train import CheckpointManager
@@ -152,7 +153,7 @@ def validate(
 def checkpoint_payload(
     *,
     stage: str,
-    model: PhyRDModel,
+    model: ForecastComposer,
     optimizer: torch.optim.Optimizer,
     dataset,
     data_config: dict[str, Any],
@@ -249,14 +250,10 @@ def main() -> None:
     stage = str(config.get("stage", "deterministic"))
     if stage not in {"deterministic", "residual"}:
         raise ValueError("stage must be 'deterministic' or 'residual'")
-    model = PhyRDModel(
+    model = build_composite_from_config(
+        config,
         input_frames=dataset.input_frames,
         output_frames=dataset.output_frames,
-        base_channels=int(model_config["base_channels"]),
-        diffusion_steps=int(model_config["diffusion_steps"]),
-        freeze_deterministic=bool(model_config["freeze_deterministic"]),
-        deterministic=dict(model_config["deterministic"]),
-        diffusion=dict(model_config.get("diffusion", {})),
     ).to(device)
     deterministic_checkpoint = model_config.get("deterministic_checkpoint")
     if stage == "residual":
@@ -339,6 +336,8 @@ def main() -> None:
     artifact_dir = Path(config["artifacts"]["directory"])
     allow_existing = bool(config["artifacts"].get("allow_existing", False))
     checkpoint_manager = CheckpointManager(artifact_dir, allow_existing=allow_existing)
+    if is_main and not allow_existing:
+        checkpoint_manager.write_config_snapshot(config)
     if world_size > 1:
         dist.barrier()
     history_log: list[dict[str, float | int]] = []

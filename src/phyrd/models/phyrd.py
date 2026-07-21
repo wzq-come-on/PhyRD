@@ -8,7 +8,10 @@ import torch
 from torch import nn
 
 from .deterministic import build_backbone
-from .diffusion import GaussianResidualDiffusion, ResidualDenoiser
+from .probabilistic.residual_diffusion.diffusion import (
+    GaussianResidualDiffusion,
+    ResidualDenoiser,
+)
 
 
 class PhyRDModel(nn.Module):
