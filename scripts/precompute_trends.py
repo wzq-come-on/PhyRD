@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,10 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader, Sampler
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from phyrd.config import load_config
 from phyrd.models import build_composite_from_config
