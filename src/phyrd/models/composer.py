@@ -53,8 +53,16 @@ class ForecastComposer(nn.Module):
         selector = getattr(self.deterministic, "select", None)
         return selector(name) if callable(selector) else None
 
-    def training_loss(self, history: torch.Tensor, target: torch.Tensor) -> dict[str, torch.Tensor]:
-        trend = self.predict_trend(history)
+    def training_loss(
+        self,
+        history: torch.Tensor,
+        target: torch.Tensor,
+        trend: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
+        if trend is None:
+            trend = self.predict_trend(history)
+        else:
+            trend = trend.detach()
         result = self.probabilistic.training_loss(history, target, trend)
         result.setdefault("trend", trend)
         result.setdefault("prediction_x0", trend + result["clean_prediction"])
@@ -66,6 +74,7 @@ class ForecastComposer(nn.Module):
         target: torch.Tensor | None = None,
         *,
         stage: str = "deterministic",
+        trend: torch.Tensor | None = None,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Compatibility entry point for the current two-stage trainer."""
         if stage == "deterministic":
@@ -78,7 +87,7 @@ class ForecastComposer(nn.Module):
         if stage == "residual":
             if target is None:
                 raise ValueError("residual forward requires target")
-            return self.training_loss(history, target)
+            return self.training_loss(history, target, trend=trend)
         raise ValueError("stage must be 'deterministic' or 'residual'")
 
     @torch.no_grad()

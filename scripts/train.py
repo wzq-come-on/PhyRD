@@ -14,7 +14,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 
 from phyrd.config import load_config
-from phyrd.data import DiffCastH5Dataset, SEVIRDataset
+from phyrd.data import CachedTrendDataset, DiffCastH5Dataset, SEVIRDataset
 from phyrd.models import build_composite_from_config, checkpoint_backbone_spec
 from phyrd.models.composer import ForecastComposer
 from phyrd.motion import build_motion_fields
@@ -65,10 +65,15 @@ def build_dataset(data_config: dict[str, Any], *, split: str, max_samples: int |
     }
     data_format = str(data_config.get("format", "catalog"))
     if data_format == "catalog":
-        return SEVIRDataset(data_config["root"], split, **dataset_kwargs)
-    if data_format == "diffcast_h5":
-        return DiffCastH5Dataset(data_config["root"], split, **dataset_kwargs)
-    raise ValueError("data.format must be 'catalog' or 'diffcast_h5'")
+        dataset = SEVIRDataset(data_config["root"], split, **dataset_kwargs)
+    elif data_format == "diffcast_h5":
+        dataset = DiffCastH5Dataset(data_config["root"], split, **dataset_kwargs)
+    else:
+        raise ValueError("data.format must be 'catalog' or 'diffcast_h5'")
+    cache_dir = data_config.get("trend_cache_dir")
+    if cache_dir:
+        dataset = CachedTrendDataset(dataset, Path(str(cache_dir)) / f"{split}.npy")
+    return dataset
 
 
 def build_loader(
@@ -124,12 +129,15 @@ def validate(
             break
         history = batch["x"].to(device, non_blocking=True)
         target = batch["y"].to(device, non_blocking=True)
+        cached_trend = batch.get("trend")
+        if cached_trend is not None:
+            cached_trend = cached_trend.to(device, non_blocking=True)
         with autocast_context(device, precision):
             if stage == "deterministic":
                 prediction = train_model(history, stage="deterministic")
                 batch_loss = torch.nn.functional.l1_loss(prediction, target)
             else:
-                result = train_model(history, target, stage="residual")
+                result = train_model(history, target, stage="residual", trend=cached_trend)
                 batch_loss = result["loss_gen"]
         batch_size = history.shape[0]
         loss_sum += batch_loss.detach().double() * batch_size
@@ -399,6 +407,9 @@ def main() -> None:
             for batch in loader:
                 history = batch["x"].to(device, non_blocking=True)
                 target = batch["y"].to(device, non_blocking=True)
+                cached_trend = batch.get("trend")
+                if cached_trend is not None:
+                    cached_trend = cached_trend.to(device, non_blocking=True)
                 active_backbone = (
                     model.select_backbone_for_step(step, seed)
                     if stage == "residual" and uses_backbone_pool
@@ -412,7 +423,9 @@ def main() -> None:
                         physics_value = loss_gen.new_zeros(())
                         total = loss_gen
                     else:
-                        result = train_model(history, target, stage=stage)
+                        result = train_model(
+                            history, target, stage=stage, trend=cached_trend
+                        )
                         loss_gen = result["loss_gen"]
                         total = loss_gen
                         physics_value = total.new_zeros(())

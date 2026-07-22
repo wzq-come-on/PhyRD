@@ -9,6 +9,10 @@ __pycache__/
 
 # Data and model state stay on the servers, never in Git.
 /data/
+!/data/
+/data/*
+!/data/.gitkeep
+!/data/README.md
 ckp/
 **/ckp/
 *.h5
