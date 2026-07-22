@@ -54,6 +54,11 @@ def main() -> None:
     p.add_argument("--num-workers", type=int, default=4)
     p.add_argument("--sampling-steps", type=int, default=20)
     p.add_argument("--ensemble-size", type=int, default=1)
+    p.add_argument(
+        "--deterministic-only",
+        action="store_true",
+        help="evaluate the selected deterministic trend without probabilistic sampling",
+    )
     p.add_argument("--physics-guidance", action="store_true")
     p.add_argument("--guidance-every", type=int, default=1)
     p.add_argument("--guidance-step-size", type=float, default=0.1)
@@ -119,7 +124,8 @@ def main() -> None:
         model.select_backbone(args.backbone)
     else:
         raise KeyError("checkpoint does not contain a deterministic state dict")
-    model.diffusion.load_state_dict(payload["diffusion"], strict=True)
+    if not args.deterministic_only:
+        model.diffusion.load_state_dict(payload["diffusion"], strict=True)
 
     frames = int(data_cfg["output_frames"])
     sums = torch.zeros(4, dtype=torch.float64, device=device)
@@ -168,12 +174,15 @@ def main() -> None:
                     )
 
                 guidance_factory = make_guidance
-            ensemble = model.sample(
-                history,
-                ensemble_size=args.ensemble_size,
-                sampling_steps=args.sampling_steps,
-                guidance_factory=guidance_factory,
-            ).clamp(0, 1).float()
+            if args.deterministic_only:
+                ensemble = model.predict_trend(history).unsqueeze(1).clamp(0, 1).float()
+            else:
+                ensemble = model.sample(
+                    history,
+                    ensemble_size=args.ensemble_size,
+                    sampling_steps=args.sampling_steps,
+                    guidance_factory=guidance_factory,
+                ).clamp(0, 1).float()
             prediction = ensemble.mean(dim=1)
             abs_sum, sq_sum, elements, batch_n = _continuous_metrics(prediction, target)
             sums += torch.stack((abs_sum, sq_sum, elements, batch_n))
@@ -245,13 +254,18 @@ def main() -> None:
     if rank == 0:
         metrics = {
             "status": "completed",
-            "model": "phyrd_residual_diffusion",
+            "model": (
+                "phyrd_deterministic_backbone"
+                if args.deterministic_only
+                else "phyrd_residual_diffusion"
+            ),
             "checkpoint": str(Path(args.checkpoint).resolve()),
             "config": str(Path(args.config).resolve()),
             "split": args.split,
             "samples": int(sums[3].item()),
             "sampling_steps": args.sampling_steps,
             "ensemble_size": args.ensemble_size,
+            "deterministic_only": args.deterministic_only,
             "physics_guidance": args.physics_guidance,
             "epoch": int(payload.get("epoch", -1)),
             "step": int(payload.get("step", -1)),
