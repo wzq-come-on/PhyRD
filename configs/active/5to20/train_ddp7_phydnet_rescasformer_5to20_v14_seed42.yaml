@@ -1,0 +1,88 @@
+# P1 formal run on seven H800 GPUs, excluding physical GPU 4.
+# Launch with:
+# CUDA_VISIBLE_DEVICES=0,1,2,3,5,6,7 \
+# torchrun --standalone --nproc_per_node=7 scripts/train.py \
+#   --config configs/active/5to20/train_ddp7_phydnet_rescasformer_5to20_v14_seed42.yaml
+seed: 42
+device: cuda:0
+stage: residual
+data:
+  format: diffcast_h5
+  root: /test1/wzq/Weather/PhyDNet/data/sevir/sevir_vil_only_25frames_384_diffcast.h5
+  split: train
+  max_samples: null
+  input_frames: 5
+  output_frames: 20
+  window_start_index: 0
+  model_resolution: 128
+  spatial_preprocess: diffcast_bilinear
+  batch_size: 4
+  num_workers: 4
+model:
+  base_channels: 64
+  diffusion_steps: 1000
+  freeze_deterministic: true
+  deterministic:
+    name: phydnet_external
+    params:
+      root: /test1/wzq/Weather/PhyDNet
+      model_resolution: 128
+  deterministic_checkpoint: /test1/wzq/Weather/PhyDNet/save/sevir_diffcast_setting/phydnet_sevir_5in20out_best.pth
+  probabilistic:
+    name: rescasformer
+    params:
+      image_size: 128
+      patch_size: 4
+      frame_hidden_size: 256
+      frame_depth: 12
+      frame_heads: 4
+      sequence_hidden_size: 1152
+      sequence_depth: 12
+      sequence_heads: 16
+      mlp_ratio: 4.0
+      gradient_checkpointing: true
+      diffusion_steps: 1000
+      prediction_type: v
+      residual_stats_path: artifacts/calibration/phydnet_residual_stats_train_5to20.json
+      x0_clip: 5.0
+      x0_clip_quantile: 0.995
+optimization:
+  learning_rate: 0.0005
+  betas: [0.9, 0.999]
+  weight_decay: 0.00001
+  max_steps: 200000
+  scheduler: cosine
+  min_lr: 0.00001
+  warmup_lr: 0.00001
+  warmup_epochs: 0.1
+  log_every: 20
+  precision: bf16
+  grad_clip: 1.0
+validation:
+  enabled: true
+  split: val_model
+  every_epochs: 5
+  max_batches: 32
+post_training_test:
+  enabled: true
+  split: report_test
+  batch_size: 1
+  num_workers: 4
+  ensemble_size: 10
+  sampling_steps: 20
+  register_result: true
+  registry_path: RESULTS_REGISTRY.csv
+  experiment_name: P1 PhyDNet plus pixel residual CasFormer DDP7
+physics:
+  enabled: false
+  robust_scale: 0.05
+  tolerance: 0.1
+  gamma_nadv: 1.0
+  pool_sizes: [8, 16, 32]
+  alpha_mass: 0.25
+  lambda_train: 0.0
+artifacts:
+  root: artifacts/experiments
+  deterministic_name: phydnet_external
+  probabilistic_name: rescasformer_ddp7
+

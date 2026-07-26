@@ -1,0 +1,97 @@
+# Final explicit-temporal residual diffusion run on seven H800 GPUs.
+# Per-GPU batch 16 was verified on the full model.  Learning rates use
+# square-root scaling from the original per-GPU batch 2 configuration.
+# Physical GPU 4 must stay excluded:
+# CUDA_VISIBLE_DEVICES=0,1,2,3,5,6,7 \
+# torchrun --standalone --nproc_per_node=7 scripts/train.py \
+#   --config configs/active/5to20/train_ddp7_phydnet_temporal_residual_dit_5to20_v15_seed42.yaml
+seed: 42
+device: cuda:0
+stage: joint_residual
+data:
+  format: diffcast_h5
+  root: /test1/wzq/Weather/PhyDNet/data/sevir/sevir_vil_only_25frames_384_diffcast.h5
+  split: train
+  max_samples: null
+  input_frames: 5
+  output_frames: 20
+  window_start_index: 0
+  model_resolution: 128
+  spatial_preprocess: diffcast_bilinear
+  batch_size: 16
+  num_workers: 4
+model:
+  base_channels: 64
+  diffusion_steps: 1000
+  freeze_deterministic: false
+  deterministic:
+    name: phydnet_external
+    params:
+      root: /test1/wzq/Weather/PhyDNet
+      model_resolution: 128
+  deterministic_checkpoint: /test1/wzq/Weather/PhyDNet/save/sevir_diffcast_setting/phydnet_sevir_5in20out_best.pth
+  probabilistic:
+    name: temporal_residual_dit
+    params:
+      image_size: 128
+      patch_size: 4
+      hidden_size: 256
+      depth: 8
+      num_heads: 8
+      mlp_ratio: 4.0
+      high_frequency_channels: 48
+      gradient_checkpointing: true
+      diffusion_steps: 1000
+      prediction_type: v
+      residual_stats_path: artifacts/calibration/phydnet_residual_stats_train_5to20.json
+      x0_clip: 5.0
+      x0_clip_quantile: 0.995
+      high_frequency_loss_weight: 0.10
+      intensity_loss_weight: 0.05
+      intensity_threshold: 0.40
+      intensity_temperature: 0.08
+joint_training:
+  warmup_epochs: 5
+  deterministic_weight: 0.5
+  diffusion_weight: 0.5
+  deterministic_learning_rate: 0.000028
+  diffusion_learning_rate: 0.00085
+optimization:
+  learning_rate: 0.00085
+  betas: [0.9, 0.999]
+  weight_decay: 0.00001
+  max_steps: 200000
+  scheduler: cosine
+  min_lr: 0.00001
+  warmup_lr: 0.00001
+  warmup_epochs: 0.1
+  log_every: 20
+  precision: bf16
+  grad_clip: 1.0
+validation:
+  enabled: true
+  split: val_model
+  every_epochs: 5
+  max_batches: 32
+post_training_test:
+  enabled: true
+  split: report_test
+  batch_size: 1
+  num_workers: 4
+  ensemble_size: 10
+  sampling_steps: 20
+  register_result: true
+  registry_path: RESULTS_REGISTRY.csv
+  experiment_name: Final PhyDNet plus explicit temporal residual DiT joint
+physics:
+  enabled: false
+  robust_scale: 0.05
+  tolerance: 0.1
+  gamma_nadv: 1.0
+  pool_sizes: [8, 16, 32]
+  alpha_mass: 0.25
+  lambda_train: 0.0
+artifacts:
+  root: artifacts/experiments
+  deterministic_name: phydnet_external
+  probabilistic_name: temporal_residual_dit_joint_ddp7_b16

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import time
 from contextlib import nullcontext
@@ -15,12 +16,23 @@ from torch.utils.data import DataLoader, DistributedSampler
 
 from phyrd.config import load_config
 from phyrd.data import CachedTrendDataset, DiffCastH5Dataset, SEVIRDataset
+from phyrd.evaluation.results_registry import append_full_test_result
 from phyrd.models import build_composite_from_config, checkpoint_backbone_spec
 from phyrd.models.composer import ForecastComposer
 from phyrd.motion import build_motion_fields
 from phyrd.physics import weak_transport_loss
-from phyrd.train import CheckpointManager, build_experiment_directory
+from phyrd.train import (
+    CheckpointManager,
+    build_experiment_directory,
+    learning_rate_multiplier,
+)
 from phyrd.utils import seed_everything, write_json
+try:
+    from scripts.evaluation.post_training import evaluate_post_training
+except ModuleNotFoundError:
+    # ``python scripts/train.py`` places ``scripts/`` rather than the repository
+    # root on sys.path.
+    from evaluation.post_training import evaluate_post_training
 
 
 def setup_runtime(config_device: str) -> tuple[torch.device, int, int, int]:
@@ -136,9 +148,14 @@ def validate(
             if stage == "deterministic":
                 prediction = train_model(history, stage="deterministic")
                 batch_loss = torch.nn.functional.l1_loss(prediction, target)
-            else:
+            elif stage == "residual":
                 result = train_model(history, target, stage="residual", trend=cached_trend)
                 batch_loss = result["loss_gen"]
+            else:
+                result = train_model(history, target, stage="joint_residual")
+                joint = getattr(train_model, "module", train_model)
+                weights = getattr(joint, "_joint_loss_weights", (0.5, 0.5))
+                batch_loss = weights[0] * result["loss_det"] + weights[1] * result["loss_diff"]
         batch_size = history.shape[0]
         loss_sum += batch_loss.detach().double() * batch_size
         sample_count += batch_size
@@ -201,7 +218,7 @@ def checkpoint_payload(
     else:
         payload["deterministic_pool"] = pool_specs
         payload["active_backbone"] = getattr(model.deterministic, "active_name", None)
-    if stage == "residual":
+    if stage in {"residual", "joint_residual"}:
         payload["diffusion"] = model.diffusion.state_dict()
         payload["protocol"]["diffusion"] = model.diffusion_config
     return payload
@@ -261,8 +278,10 @@ def main() -> None:
         )
     model_config = config["model"]
     stage = str(config.get("stage", "deterministic"))
-    if stage not in {"deterministic", "residual"}:
-        raise ValueError("stage must be 'deterministic' or 'residual'")
+    if stage not in {"deterministic", "residual", "joint_residual"}:
+        raise ValueError(
+            "stage must be 'deterministic', 'residual', or 'joint_residual'"
+        )
     model = build_composite_from_config(
         config,
         input_frames=dataset.input_frames,
@@ -270,7 +289,9 @@ def main() -> None:
     ).to(device)
     deterministic_checkpoint = model_config.get("deterministic_checkpoint")
     uses_backbone_pool = hasattr(model.deterministic, "select_for_step")
-    if stage == "residual":
+    if stage in {"residual", "joint_residual"}:
+        if stage == "joint_residual" and uses_backbone_pool:
+            raise ValueError("joint_residual requires one trainable deterministic backbone")
         if uses_backbone_pool:
             model.deterministic.requires_grad_(False)
             model.deterministic.eval()
@@ -282,10 +303,15 @@ def main() -> None:
             checkpoint_path = Path(deterministic_checkpoint)
             if not checkpoint_path.is_file():
                 raise FileNotFoundError(f"deterministic checkpoint not found: {checkpoint_path}")
-            payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-            if "deterministic" not in payload:
+            external_loader = getattr(model.deterministic, "load_external_checkpoint", None)
+            if callable(external_loader):
+                external_loader(checkpoint_path)
+                payload = None
+            else:
+                payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            if payload is not None and "deterministic" not in payload:
                 raise KeyError("checkpoint does not contain a deterministic state dict")
-            checkpoint_protocol = payload.get("protocol")
+            checkpoint_protocol = payload.get("protocol") if payload is not None else None
             expected_data_protocol = {
                 "input_frames": dataset.input_frames,
                 "output_frames": dataset.output_frames,
@@ -301,7 +327,7 @@ def main() -> None:
                 if isinstance(checkpoint_protocol, dict)
                 else None
             )
-            if (
+            if payload is not None and (
                 checkpoint_data_protocol != expected_data_protocol
                 or checkpoint_deterministic != dict(model_config["deterministic"])
             ):
@@ -311,11 +337,13 @@ def main() -> None:
                     f"current_data={expected_data_protocol}, "
                     f"current_deterministic={model_config['deterministic']}"
                 )
-            model.deterministic.load_state_dict(payload["deterministic"])
-            model.deterministic.requires_grad_(False)
-            model.deterministic.eval()
+            if payload is not None:
+                model.deterministic.load_state_dict(payload["deterministic"])
+            model.deterministic.requires_grad_(stage == "joint_residual")
+            if stage == "residual":
+                model.deterministic.eval()
             model.diffusion.requires_grad_(True)
-            model.freeze_deterministic = True
+            model.freeze_deterministic = stage == "residual"
     else:
         model.deterministic.requires_grad_(True)
         model.diffusion.requires_grad_(False)
@@ -327,20 +355,53 @@ def main() -> None:
             device_ids=[local_rank],
             output_device=local_rank,
             broadcast_buffers=False,
+            find_unused_parameters=stage == "joint_residual",
         )
         # Only the residual stage needs independent diffusion noise on each rank.
-        if stage == "residual":
+        if stage in {"residual", "joint_residual"}:
             torch.manual_seed(seed + rank)
     optimization = config["optimization"]
-    parameters = [
-        parameter
-        for parameter in (
-            model.deterministic.parameters() if stage == "deterministic" else model.diffusion.parameters()
-        )
-        if parameter.requires_grad
-    ]
+    joint_config = dict(config.get("joint_training", {}))
+    det_weight = float(joint_config.get("deterministic_weight", 0.5))
+    diff_weight = float(joint_config.get("diffusion_weight", 0.5))
+    if stage == "joint_residual" and not math.isclose(
+        det_weight + diff_weight, 1.0, abs_tol=1e-6
+    ):
+        raise ValueError("joint_training loss weights must sum to one")
+    model._joint_loss_weights = (det_weight, diff_weight)
+    if stage == "joint_residual":
+        optimizer_groups = [
+            {
+                "params": list(model.deterministic.parameters()),
+                "lr": float(joint_config.get("deterministic_learning_rate", 1e-5)),
+                "name": "deterministic",
+            },
+            {
+                "params": list(model.diffusion.parameters()),
+                "lr": float(
+                    joint_config.get(
+                        "diffusion_learning_rate", optimization["learning_rate"]
+                    )
+                ),
+                "name": "diffusion",
+            },
+        ]
+        parameters = [
+            parameter for group in optimizer_groups for parameter in group["params"]
+        ]
+    else:
+        parameters = [
+            parameter
+            for parameter in (
+                model.deterministic.parameters()
+                if stage == "deterministic"
+                else model.diffusion.parameters()
+            )
+            if parameter.requires_grad
+        ]
+        optimizer_groups = parameters
     optimizer = torch.optim.AdamW(
-        parameters,
+        optimizer_groups,
         lr=float(optimization["learning_rate"]),
         betas=tuple(float(value) for value in optimization.get("betas", (0.9, 0.999))),
         weight_decay=float(optimization["weight_decay"]),
@@ -351,6 +412,7 @@ def main() -> None:
         max_steps = len(loader) * int(optimization["max_epochs"])
     else:
         max_steps = int(optimization["max_steps"])
+    initial_group_lrs = [float(group["lr"]) for group in optimizer.param_groups]
     precision = str(optimization.get("precision", "fp32"))
     scaler = torch.cuda.amp.GradScaler(enabled=device.type == "cuda" and precision == "fp16")
     artifacts_config = dict(config["artifacts"])
@@ -394,6 +456,7 @@ def main() -> None:
     if world_size > 1:
         dist.barrier()
     history_log: list[dict[str, float | int | str]] = []
+    train_jsonl_path = checkpoint_manager.metrics_directory / "train_log.jsonl"
     step = 0
     epoch = 0
     last_val_loss: float | None = None
@@ -402,9 +465,27 @@ def main() -> None:
     started = time.time()
     try:
         while step < max_steps:
+            if stage == "joint_residual":
+                warmup_epochs = int(joint_config.get("warmup_epochs", 5))
+                deterministic_trainable = epoch >= warmup_epochs
+                model.deterministic.requires_grad_(deterministic_trainable)
+                model.deterministic.train(deterministic_trainable)
+                model.freeze_deterministic = not deterministic_trainable
             if sampler is not None:
                 sampler.set_epoch(epoch)
             for batch in loader:
+                lr_multiplier = learning_rate_multiplier(
+                    optimization,
+                    step=step,
+                    max_steps=max_steps,
+                    steps_per_epoch=len(loader),
+                )
+                for group, initial_lr in zip(
+                    optimizer.param_groups,
+                    initial_group_lrs,
+                    strict=True,
+                ):
+                    group["lr"] = initial_lr * lr_multiplier
                 history = batch["x"].to(device, non_blocking=True)
                 target = batch["y"].to(device, non_blocking=True)
                 cached_trend = batch.get("trend")
@@ -422,12 +503,18 @@ def main() -> None:
                         loss_gen = result["loss_gen"]
                         physics_value = loss_gen.new_zeros(())
                         total = loss_gen
-                    else:
+                    elif stage == "residual":
                         result = train_model(
                             history, target, stage=stage, trend=cached_trend
                         )
                         loss_gen = result["loss_gen"]
                         total = loss_gen
+                        physics_value = total.new_zeros(())
+                    else:
+                        result = train_model(history, target, stage=stage)
+                        loss_gen = result["loss_diff"]
+                        loss_det = result["loss_det"]
+                        total = det_weight * loss_det + diff_weight * loss_gen
                         physics_value = total.new_zeros(())
                 if stage == "residual" and config["physics"]["enabled"]:
                     physics_timestep_max = int(
@@ -458,6 +545,23 @@ def main() -> None:
                     total = total + config["physics"]["lambda_train"] * physics_value
                 scaler.scale(total).backward()
                 scaler.unscale_(optimizer)
+                det_grad_norm = total.new_zeros(())
+                diff_grad_norm = total.new_zeros(())
+                if stage == "joint_residual":
+                    det_grads = [
+                        parameter.grad.detach().norm(2)
+                        for parameter in model.deterministic.parameters()
+                        if parameter.grad is not None
+                    ]
+                    diff_grads = [
+                        parameter.grad.detach().norm(2)
+                        for parameter in model.diffusion.parameters()
+                        if parameter.grad is not None
+                    ]
+                    if det_grads:
+                        det_grad_norm = torch.stack(det_grads).norm(2)
+                    if diff_grads:
+                        diff_grad_norm = torch.stack(diff_grads).norm(2)
                 grad_clip = optimization.get("grad_clip")
                 if grad_clip is not None:
                     torch.nn.utils.clip_grad_norm_(parameters, float(grad_clip))
@@ -471,15 +575,58 @@ def main() -> None:
                         "loss": distributed_mean(total, world_size),
                         "loss_gen": distributed_mean(loss_gen, world_size),
                         "loss_phys": distributed_mean(physics_value, world_size),
+                        "lr": float(optimizer.param_groups[-1]["lr"]),
                     }
                     if active_backbone is not None:
                         record["backbone"] = active_backbone
-                    if stage == "deterministic":
+                    if stage in {"deterministic", "residual"}:
                         for metric_name, metric_value in result.items():
                             if metric_name.startswith("loss_") and metric_name != "loss_gen":
                                 record[metric_name] = distributed_mean(metric_value, world_size)
+                    elif stage == "joint_residual":
+                        record.update(
+                            {
+                                "loss_det": distributed_mean(result["loss_det"], world_size),
+                                "loss_diff": distributed_mean(result["loss_diff"], world_size),
+                                "grad_norm_det": distributed_mean(det_grad_norm, world_size),
+                                "grad_norm_diff": distributed_mean(diff_grad_norm, world_size),
+                                "lr_det": float(optimizer.param_groups[0]["lr"]),
+                                "lr_diff": float(optimizer.param_groups[1]["lr"]),
+                                "deterministic_trainable": bool(
+                                    epoch >= int(joint_config.get("warmup_epochs", 5))
+                                ),
+                            }
+                        )
+                        # Joint residual architectures can expose different
+                        # diagnostics. Log scalar losses generically and retain
+                        # TrajRes-only fields when that model provides them.
+                        for metric_name, metric_value in result.items():
+                            if (
+                                metric_name.startswith("loss_")
+                                and metric_name not in record
+                                and torch.is_tensor(metric_value)
+                                and metric_value.numel() == 1
+                            ):
+                                record[metric_name] = distributed_mean(
+                                    metric_value, world_size
+                                )
+                        for metric_name in ("segment_index", "prefix_mode"):
+                            if metric_name in result:
+                                metric_value = result[metric_name]
+                                record[metric_name] = int(
+                                    metric_value.item()
+                                    if torch.is_tensor(metric_value)
+                                    else metric_value
+                                )
+                        if "residual_abs_mean" in result:
+                            record["residual_abs_mean"] = distributed_mean(
+                                result["residual_abs_mean"], world_size
+                            )
                     if is_main:
                         history_log.append(record)
+                        with train_jsonl_path.open("a", encoding="utf-8") as handle:
+                            handle.write(json.dumps(record, sort_keys=True) + "\n")
+                            handle.flush()
                         print(json.dumps(record, sort_keys=True), flush=True)
                 if step >= max_steps:
                     break
@@ -581,6 +728,103 @@ def main() -> None:
                     "last_val_loss": last_val_loss,
                 },
             )
+        post_test_config = dict(config.get("post_training_test", {}))
+        # ``--max-steps`` is the explicit smoke/debug override.  It must never
+        # consume a full report split or enter the formal result registry.
+        if bool(post_test_config.get("enabled", False)) and args.max_steps is None:
+            if not validation_enabled:
+                raise ValueError(
+                    "post_training_test requires validation so checkpoint_best.pt exists"
+                )
+            if world_size > 1:
+                dist.barrier()
+            best_checkpoint = (
+                checkpoint_manager.checkpoint_directory / "checkpoint_best.pt"
+            )
+            if not best_checkpoint.is_file():
+                raise FileNotFoundError(
+                    f"best checkpoint was not created: {best_checkpoint}"
+                )
+            best_payload = torch.load(
+                best_checkpoint, map_location="cpu", weights_only=False
+            )
+            if "deterministic" in best_payload:
+                model.deterministic.load_state_dict(
+                    best_payload["deterministic"], strict=True
+                )
+            if "diffusion" in best_payload:
+                model.diffusion.load_state_dict(best_payload["diffusion"], strict=True)
+            else:
+                raise KeyError("best checkpoint does not contain diffusion weights")
+            test_split = str(post_test_config.get("split", "report_test"))
+            test_dataset = build_dataset(
+                data_config,
+                split=test_split,
+                # A post-training test is always the complete registered split.
+                max_samples=None,
+            )
+            try:
+                metrics = evaluate_post_training(
+                    model,
+                    test_dataset,
+                    device=device,
+                    rank=rank,
+                    world_size=world_size,
+                    batch_size=int(
+                        post_test_config.get("batch_size", data_config["batch_size"])
+                    ),
+                    num_workers=int(
+                        post_test_config.get("num_workers", num_workers)
+                    ),
+                    ensemble_size=int(
+                        post_test_config.get("ensemble_size", 10)
+                    ),
+                    sampling_steps=int(
+                        post_test_config.get("sampling_steps", 20)
+                    ),
+                    checkpoint_epoch=int(best_payload.get("epoch", -1)),
+                    checkpoint_path=str(best_checkpoint.resolve()),
+                    split=test_split,
+                )
+                if is_main:
+                    assert metrics is not None
+                    metrics["protocol"] = (
+                        f"{dataset.input_frames}to{dataset.output_frames}"
+                        f"@{dataset.model_resolution}"
+                    )
+                    metrics_path = (
+                        checkpoint_manager.metrics_directory
+                        / f"{test_split}_best_full.json"
+                    )
+                    write_json(metrics_path, metrics)
+                    if bool(post_test_config.get("register_result", True)):
+                        probabilistic_name = str(
+                            model_config.get("probabilistic", {}).get(
+                                "name", "residual_diffusion"
+                            )
+                        )
+                        result_id = append_full_test_result(
+                            post_test_config.get(
+                                "registry_path", "RESULTS_REGISTRY.csv"
+                            ),
+                            metrics=metrics,
+                            experiment=str(
+                                post_test_config.get(
+                                    "experiment_name",
+                                    f"{model.deterministic_name}+{probabilistic_name}",
+                                )
+                            ),
+                            deterministic_backbone=model.deterministic_name,
+                            probabilistic_module=probabilistic_name,
+                            evidence=str(metrics_path.resolve()),
+                        )
+                        metrics["registry_result_id"] = result_id
+                        write_json(metrics_path, metrics)
+                    print(json.dumps({"post_training_test": metrics}, sort_keys=True))
+            finally:
+                test_dataset.close()
+            if world_size > 1:
+                dist.barrier()
     finally:
         dataset.close()
         if validation_dataset is not None:

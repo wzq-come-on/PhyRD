@@ -11,6 +11,8 @@ from pathlib import Path
 import torch
 from torch import nn
 
+from ..base import DeterministicLossOutput
+
 
 class ExternalPhyDNetForecast(nn.Module):
     def __init__(
@@ -46,3 +48,17 @@ class ExternalPhyDNetForecast(nn.Module):
 
     def forward(self, history: torch.Tensor) -> torch.Tensor:
         return self.model.inference(history).clamp(0.0, 1.0)
+
+    def training_loss(
+        self, history: torch.Tensor, target: torch.Tensor
+    ) -> DeterministicLossOutput:
+        prediction, loss = self.model.predict(
+            history, frames_gt=target, compute_loss=True, T_out=target.shape[1]
+        )
+        if loss is None:
+            raise RuntimeError("external PhyDNet did not return a training loss")
+        return DeterministicLossOutput(
+            loss=loss,
+            prediction=prediction,
+            metrics={"loss_phydnet": loss},
+        )

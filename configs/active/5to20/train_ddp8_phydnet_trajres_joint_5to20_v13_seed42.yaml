@@ -1,0 +1,82 @@
+# J-Core: PhyDNet + 4x5 trajectory-conditioned residual diffusion.
+# Run with:
+# torchrun --standalone --nproc_per_node=8 scripts/train.py --config configs/active/5to20/train_ddp8_phydnet_trajres_joint_5to20_v13_seed42.yaml
+seed: 42
+device: cuda:0
+stage: joint_residual
+data:
+  format: diffcast_h5
+  root: /test1/wzq/Weather/PhyDNet/data/sevir/sevir_vil_only_25frames_384_diffcast.h5
+  split: train
+  max_samples: null
+  input_frames: 5
+  output_frames: 20
+  window_start_index: 0
+  model_resolution: 128
+  spatial_preprocess: diffcast_bilinear
+  batch_size: 8
+  num_workers: 4
+model:
+  base_channels: 64
+  diffusion_steps: 100
+  freeze_deterministic: false
+  deterministic:
+    name: phydnet_external
+    params:
+      root: /test1/wzq/Weather/PhyDNet
+      model_resolution: 128
+  deterministic_checkpoint: /test1/wzq/Weather/PhyDNet/save/sevir_diffcast_setting/phydnet_sevir_5in20out_best.pth
+  probabilistic:
+    name: trajres_diffusion
+    params:
+      segment_frames: 5
+      base_channels: 64
+      attention_heads: 4
+      diffusion_steps: 100
+      prediction_type: v
+      residual_stats_path: artifacts/calibration/phydnet_residual_stats_train_5to20.json
+      prefix_clean_probability: 0.25
+      prefix_noisy_probability: 0.65
+      prefix_zero_probability: 0.10
+      prefix_noise_max: 0.35
+joint_training:
+  warmup_epochs: 5
+  deterministic_weight: 0.5
+  diffusion_weight: 0.5
+  deterministic_learning_rate: 0.00001
+  diffusion_learning_rate: 0.0004
+optimization:
+  learning_rate: 0.0004
+  betas: [0.9, 0.999]
+  weight_decay: 0.00001
+  max_epochs: 200
+  log_every: 10
+  precision: bf16
+  grad_clip: 1.0
+validation:
+  enabled: true
+  split: val_model
+  every_epochs: 5
+  max_batches: 32
+post_training_test:
+  enabled: true
+  split: report_test
+  batch_size: 4
+  num_workers: 4
+  ensemble_size: 10
+  sampling_steps: 20
+  register_result: true
+  registry_path: RESULTS_REGISTRY.csv
+  experiment_name: J-Core PhyDNet plus TrajRes-DF joint
+physics:
+  enabled: false
+  robust_scale: 0.05
+  tolerance: 0.1
+  gamma_nadv: 1.0
+  pool_sizes: [8, 16, 32]
+  alpha_mass: 0.25
+  lambda_train: 0.0
+artifacts:
+  root: artifacts/experiments
+  deterministic_name: phydnet_external
+  probabilistic_name: trajres_diffusion

@@ -88,10 +88,14 @@ def main() -> None:
         output_frames=dataset.output_frames,
         params=dict(deterministic_spec["params"]),
     ).to(device)
-    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    if checkpoint_backbone_spec(payload.get("protocol", {})) != deterministic_spec:
-        raise ValueError("checkpoint deterministic protocol does not match the config")
-    model.load_state_dict(payload["deterministic"])
+    external_loader = getattr(model, "load_external_checkpoint", None)
+    if callable(external_loader):
+        external_loader(checkpoint_path)
+    else:
+        payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        if checkpoint_backbone_spec(payload.get("protocol", {})) != deterministic_spec:
+            raise ValueError("checkpoint deterministic protocol does not match the config")
+        model.load_state_dict(payload["deterministic"])
     model.eval().requires_grad_(False)
 
     leads = dataset.output_frames

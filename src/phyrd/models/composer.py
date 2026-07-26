@@ -32,6 +32,8 @@ class ForecastComposer(nn.Module):
     @property
     def diffusion(self) -> nn.Module:
         """Compatibility alias while callers migrate to ``probabilistic``."""
+        if bool(getattr(self.probabilistic, "checkpoint_as_diffusion", False)):
+            return self.probabilistic
         diffusion = getattr(self.probabilistic, "diffusion", None)
         if diffusion is None:
             raise AttributeError("the selected probabilistic model has no diffusion module")
@@ -88,7 +90,22 @@ class ForecastComposer(nn.Module):
             if target is None:
                 raise ValueError("residual forward requires target")
             return self.training_loss(history, target, trend=trend)
-        raise ValueError("stage must be 'deterministic' or 'residual'")
+        if stage == "joint_residual":
+            if target is None:
+                raise ValueError("joint_residual forward requires target")
+            deterministic_result = self.deterministic.training_loss(history, target)
+            live_trend = deterministic_result.prediction
+            probabilistic_result = self.probabilistic.training_loss(
+                history, target, live_trend
+            )
+            probabilistic_result["trend"] = live_trend
+            probabilistic_result["loss_det"] = deterministic_result.loss
+            for name, value in deterministic_result.metrics.items():
+                probabilistic_result.setdefault(name, value)
+            return probabilistic_result
+        raise ValueError(
+            "stage must be 'deterministic', 'residual', or 'joint_residual'"
+        )
 
     @torch.no_grad()
     def sample(
