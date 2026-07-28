@@ -42,6 +42,14 @@ def choose_high_precipitation_sample(dataset: DiffCastH5Dataset) -> tuple[int, d
     return best_index, best_item
 
 
+def choose_requested_sample(dataset: DiffCastH5Dataset, requested: int) -> tuple[int, dict]:
+    if requested < 0:
+        return choose_high_precipitation_sample(dataset)
+    if requested >= len(dataset):
+        raise ValueError(f"sample index {requested} outside report_test [0, {len(dataset)})")
+    return requested, dataset[requested]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
@@ -49,6 +57,12 @@ def main() -> None:
     parser.add_argument("--deterministic-checkpoint", required=True)
     parser.add_argument("--data", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--sample-index",
+        type=int,
+        default=-1,
+        help="report_test sample index; -1 selects the highest-precipitation sample in the first 128",
+    )
     parser.add_argument("--sampling-steps", type=int, default=20)
     parser.add_argument("--device", default="cuda:0")
     args = parser.parse_args()
@@ -65,7 +79,7 @@ def main() -> None:
         model_resolution=int(data_config["model_resolution"]),
         spatial_preprocess=str(data_config["spatial_preprocess"]),
     )
-    sample_index, item = choose_high_precipitation_sample(dataset)
+    sample_index, item = choose_requested_sample(dataset, args.sample_index)
     history = item["x"].unsqueeze(0).to(device)
     target = item["y"].unsqueeze(0).to(device)
 
@@ -137,7 +151,7 @@ def main() -> None:
     colorbar.set_ticks([0, 16, 31, 59, 74, 100, 133, 160, 181, 219, 255])
     colorbar.ax.tick_params(labelsize=9)
     fig.suptitle(
-        f"PhyDNet vs Temporal Residual DiT | high-precipitation report_test sample "
+        f"PhyDNet vs Temporal Residual DiT | report_test sample "
         f"{sample_index} ({item['sample_id']}) | K=1 and K=10",
         fontsize=16,
     )
