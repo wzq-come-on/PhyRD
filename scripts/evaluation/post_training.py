@@ -70,7 +70,9 @@ def evaluate_post_training(
     crps_sum = torch.zeros(1, dtype=torch.float64, device=device)
     crps_n = torch.zeros(1, dtype=torch.float64, device=device)
     started = time.perf_counter()
-    for batch in loader:
+    processed_local = 0
+    total_samples = len(dataset)
+    for batch_index, batch in enumerate(loader):
         history = batch["x"].to(device, non_blocking=True)
         target = batch["y"].to(device, non_blocking=True).float()
         ensemble = model.sample(
@@ -98,6 +100,21 @@ def evaluate_post_training(
             * prediction.shape[0]
         )
         crps_n += prediction.shape[0]
+        processed_local += int(prediction.shape[0])
+        if (batch_index + 1) % 10 == 0 or batch_index + 1 == len(loader):
+            progress = torch.tensor(
+                float(processed_local), dtype=torch.float64, device=device
+            )
+            if world_size > 1:
+                dist.all_reduce(progress, op=dist.ReduceOp.SUM)
+            if rank == 0:
+                percent = 100.0 * progress.item() / max(1, total_samples)
+                elapsed = time.perf_counter() - started
+                print(
+                    f"[report_test] processed {int(progress.item())}/{total_samples} "
+                    f"({percent:.1f}%) elapsed={elapsed / 60.0:.1f} min",
+                    flush=True,
+                )
     if world_size > 1:
         for value in (
             sums,

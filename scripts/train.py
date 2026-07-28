@@ -229,8 +229,25 @@ def main() -> None:
     parser.add_argument("--config", default="configs/active/5to20/train_ddp8_sdir_source_diffcast_5to20.yaml")
     parser.add_argument("--data-root", default=None)
     parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument(
+        "--resume",
+        default=None,
+        help="resume from a PhyRD checkpoint_last.pt (restores model, optimizer, step, and epoch)",
+    )
     args = parser.parse_args()
     config = load_config(args.config)
+    resume_path = Path(args.resume).expanduser().resolve() if args.resume else None
+    if resume_path is not None and not resume_path.is_file():
+        raise FileNotFoundError(f"resume checkpoint not found: {resume_path}")
+    # Reuse the original run directory when resuming, so checkpoints and logs
+    # continue in-place instead of creating a new timestamped experiment.
+    if resume_path is not None:
+        resume_run_dir = resume_path.parent.parent
+        config["artifacts"] = {
+            **dict(config.get("artifacts", {})),
+            "directory": str(resume_run_dir),
+            "allow_existing": True,
+        }
     seed = int(config["seed"])
     seed_everything(seed)
     device, rank, local_rank, world_size = setup_runtime(config.get("device", "cuda:0"))
@@ -348,6 +365,17 @@ def main() -> None:
         model.deterministic.requires_grad_(True)
         model.diffusion.requires_grad_(False)
         model.freeze_deterministic = False
+    resume_payload = None
+    if resume_path is not None:
+        resume_payload = torch.load(resume_path, map_location="cpu", weights_only=False)
+        if str(resume_payload.get("stage", stage)) != stage:
+            raise ValueError(
+                f"resume stage mismatch: checkpoint={resume_payload.get('stage')}, current={stage}"
+            )
+        if "deterministic" in resume_payload:
+            model.deterministic.load_state_dict(resume_payload["deterministic"], strict=True)
+        if stage in {"residual", "joint_residual"} and "diffusion" in resume_payload:
+            model.diffusion.load_state_dict(resume_payload["diffusion"], strict=True)
     train_model: torch.nn.Module = model
     if world_size > 1:
         train_model = DistributedDataParallel(
@@ -406,13 +434,27 @@ def main() -> None:
         betas=tuple(float(value) for value in optimization.get("betas", (0.9, 0.999))),
         weight_decay=float(optimization["weight_decay"]),
     )
+    if resume_payload is not None and "optimizer" in resume_payload:
+        optimizer.load_state_dict(resume_payload["optimizer"])
     if args.max_steps is not None:
         max_steps = int(args.max_steps)
     elif optimization.get("max_epochs") is not None:
         max_steps = len(loader) * int(optimization["max_epochs"])
     else:
         max_steps = int(optimization["max_steps"])
-    initial_group_lrs = [float(group["lr"]) for group in optimizer.param_groups]
+    # The schedule is defined relative to the configured base LR.  Loading an
+    # optimizer checkpoint restores its already-decayed LR, so using that value
+    # as the new base would decay it a second time after every resumed step.
+    if stage == "joint_residual":
+        initial_group_lrs = [
+            float(joint_config.get("deterministic_learning_rate", 1e-5)),
+            float(joint_config.get("diffusion_learning_rate", optimization["learning_rate"])),
+        ]
+    else:
+        initial_group_lrs = [float(optimization["learning_rate"])]
+    if resume_payload is not None:
+        for group, base_lr in zip(optimizer.param_groups, initial_group_lrs, strict=True):
+            group["lr"] = base_lr
     precision = str(optimization.get("precision", "fp32"))
     scaler = torch.cuda.amp.GradScaler(enabled=device.type == "cuda" and precision == "fp16")
     artifacts_config = dict(config["artifacts"])
@@ -457,9 +499,32 @@ def main() -> None:
         dist.barrier()
     history_log: list[dict[str, float | int | str]] = []
     train_jsonl_path = checkpoint_manager.metrics_directory / "train_log.jsonl"
-    step = 0
-    epoch = 0
-    last_val_loss: float | None = None
+    if resume_payload is not None:
+        existing_history = checkpoint_manager.metrics_directory / "train_log.json"
+        if existing_history.is_file():
+            try:
+                loaded_history = json.loads(existing_history.read_text(encoding="utf-8"))
+                if isinstance(loaded_history, list):
+                    history_log = loaded_history
+            except (OSError, json.JSONDecodeError):
+                pass
+        step = int(resume_payload.get("step", 0))
+        epoch = int(resume_payload.get("epoch", 0))
+        last_val_loss = resume_payload.get("val_loss")
+    else:
+        step = 0
+        epoch = 0
+        last_val_loss = None
+    if resume_path is not None:
+        best_path = checkpoint_manager.checkpoint_directory / "checkpoint_best.pt"
+        if best_path.is_file():
+            try:
+                best_payload = torch.load(best_path, map_location="cpu", weights_only=False)
+                best_loss = best_payload.get("val_loss")
+                if best_loss is not None:
+                    checkpoint_manager.best_val_loss = float(best_loss)
+            except (OSError, RuntimeError, EOFError):
+                pass
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
     started = time.time()

@@ -12,11 +12,11 @@ import json
 import sys
 from typing import Sequence
 
-import numpy as np
-import torch
-
 
 def _artifact_main(argv: Sequence[str]) -> None:
+    import numpy as np
+    import torch
+
     parser = argparse.ArgumentParser(description="Evaluate a PhyRD prediction artifact")
     parser.add_argument("--predictions", required=True, help="NPZ with prediction, target, optional ensemble")
     parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
@@ -56,7 +56,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "--mode",
         required=True,
-        choices=("artifact", "protocol", "residual_diffcast", "deterministic_diffcast"),
+        choices=("artifact", "protocol", "residual_diffcast", "deterministic_diffcast", "report"),
     )
     parser.add_argument("--protocol", choices=("5to20", "13to12"), help="protocol for --mode protocol")
     args, remainder = parser.parse_known_args(raw)
@@ -70,8 +70,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         run(args.protocol, remainder)
     elif args.mode == "residual_diffcast":
         _module_main("scripts.evaluation.evaluate_residual_diffcast", remainder)
-    else:
+    elif args.mode == "deterministic_diffcast":
         _module_main("scripts.evaluation.evaluate_deterministic_diffcast", remainder)
+    else:
+        _module_main("scripts.evaluation.report", remainder)
 
 
 if __name__ == "__main__":

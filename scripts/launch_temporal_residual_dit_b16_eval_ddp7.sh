@@ -18,13 +18,13 @@ mkdir -p "$RUN_DIR/metrics" "$RUN_DIR/visualizations"
   scripts/evaluate_composite_checkpoint.py \
   --config configs/active/5to20/train_ddp7_phydnet_temporal_residual_dit_5to20_v15_seed42.yaml \
   --checkpoint "$CHECKPOINT" \
-  --output "$RUN_DIR/metrics/report_test_best_k10_ddp7.json" \
+  --output "$RUN_DIR/metrics/report_test_best_k10_ddp7_b8_progress.json" \
   --split report_test \
-  --batch-size 1 \
+  --batch-size 8 \
   --num-workers 4 \
   --ensemble-size 10 \
   --sampling-steps 20 \
-  2>&1 | tee "$RUN_DIR/metrics/report_test_best_k10_ddp7.log"
+  2>&1 | tee "$RUN_DIR/metrics/report_test_best_k10_ddp7_b8_progress.log"
 
 # Use physical GPU 1 (local cuda:0 after the CUDA_VISIBLE_DEVICES mask) for
 # the one-sample presentation figure after all distributed metrics are done.
@@ -33,9 +33,9 @@ CUDA_VISIBLE_DEVICES=1 /test1/wzq/envs/PhyRD/bin/python scripts/visualize_compar
   --checkpoint "$CHECKPOINT" \
   --deterministic-checkpoint /test1/wzq/Weather/PhyDNet/save/sevir_diffcast_setting/phydnet_sevir_5in20out_best.pth \
   --data /test1/wzq/Weather/PhyDNet/data/sevir/sevir_vil_only_25frames_384_diffcast.h5 \
-  --output "$RUN_DIR/visualizations/report_test_best_k10_ddp7.png" \
+  --output "$RUN_DIR/visualizations/report_test_best_k10_ddp7_b8_progress.png" \
   --ensemble-size 10 \
   --sampling-steps 20 \
   --method-label "Temporal Residual DiT" \
   --device cuda:0 \
-  2>&1 | tee "$RUN_DIR/visualizations/report_test_best_k10_ddp7.log"
+  2>&1 | tee "$RUN_DIR/visualizations/report_test_best_k10_ddp7_b8_progress.log"
