@@ -77,6 +77,32 @@ def zero_init_equivalence(variant: str, hidden_size: int, patch_size: int) -> fl
     return float((reference - output).abs().max())
 
 
+def motion_gradient_check(variant: str, hidden_size: int, patch_size: int) -> bool:
+    if variant == "baseline":
+        return True
+    seed_everything(321)
+    candidate = build_motion_probe(
+        variant, hidden_size=hidden_size, patch_size=patch_size
+    )
+    projection = (
+        candidate.context_projection
+        if variant == "globalnet"
+        else candidate.to_scale_shift
+    )
+    torch.nn.init.normal_(projection.weight, std=1e-3)
+    history = torch.rand(2, 5, 1, 32, 32)
+    trend = torch.rand(2, 20, 1, 32, 32)
+    candidate(history, trend).square().mean().backward()
+    gradients = [
+        parameter.grad
+        for name, parameter in candidate.named_parameters()
+        if not name.startswith("stem.") and parameter.grad is not None
+    ]
+    return bool(gradients) and any(
+        bool(torch.count_nonzero(gradient)) for gradient in gradients
+    )
+
+
 def make_loader(
     config: dict,
     cache_dir: Path,
@@ -181,8 +207,21 @@ def main() -> None:
     equivalence_error = zero_init_equivalence(args.variant, args.hidden_size, args.patch_size)
     if equivalence_error > 1e-6:
         raise RuntimeError(f"zero-init equivalence failed: max_abs_error={equivalence_error}")
+    gradient_check = motion_gradient_check(
+        args.variant, args.hidden_size, args.patch_size
+    )
+    if not gradient_check:
+        raise RuntimeError("motion branch did not receive a non-zero gradient")
     if args.check_only:
-        print(json.dumps({"variant": args.variant, "zero_init_max_abs_error": equivalence_error}))
+        print(
+            json.dumps(
+                {
+                    "variant": args.variant,
+                    "zero_init_max_abs_error": equivalence_error,
+                    "motion_gradient_check": gradient_check,
+                }
+            )
+        )
         return
 
     seed_everything(args.seed)
@@ -268,6 +307,7 @@ def main() -> None:
             ),
             "shared_state_fingerprint": shared_state_fingerprint(model),
             "zero_init_max_abs_error": equivalence_error,
+            "motion_gradient_check": gradient_check,
             "elapsed_seconds": time.time() - started,
             "loss_trace": losses,
             "metrics": metrics,
