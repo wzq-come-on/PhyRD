@@ -111,6 +111,7 @@ def make_loader(
     batch_size: int,
     num_workers: int,
     shuffle: bool,
+    seed: int,
 ) -> tuple[CachedTrendDataset, DataLoader]:
     dataset = build_dataset(dict(config["data"]), split=split, max_samples=samples)
     cached = CachedTrendDataset(dataset, cache_dir / f"{split}.npy")
@@ -122,6 +123,7 @@ def make_loader(
         pin_memory=True,
         persistent_workers=num_workers > 0,
         drop_last=shuffle,
+        generator=torch.Generator().manual_seed(seed),
     )
     return cached, loader
 
@@ -238,6 +240,7 @@ def main() -> None:
         args.batch_size,
         args.num_workers,
         True,
+        args.seed,
     )
     val_dataset, val_loader = make_loader(
         config,
@@ -247,6 +250,7 @@ def main() -> None:
         args.batch_size,
         args.num_workers,
         False,
+        args.seed + 1,
     )
     model = build_motion_probe(
         args.variant, hidden_size=args.hidden_size, patch_size=args.patch_size
